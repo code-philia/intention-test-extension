@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        iframe {
+            width: 100vw;
+            height: 100vh;
+            border: none;
+        }
+    </style>
+</head>
+
+<body>
+    <iframe id="mainFrame" src="http://localhost:5173"></iframe>
+    <script>
+        const vscode = acquireVsCodeApi();
+        const iframe = document.getElementById('mainFrame');
+
+        // Forward messages from iframe to VS Code
+        window.addEventListener('message', (event) => {
+            if (event.source === iframe.contentWindow) {
+                vscode.postMessage(event.data);
+            }
+        });
+
+        // Forward messages from VS Code to iframe
+        window.addEventListener('message', (event) => {
+            const message = event.data;
+            if (iframe.contentWindow) {
+                iframe.contentWindow.postMessage(message, '*');
+            }
+        });
+    </script>
+</body>
+
+</html>

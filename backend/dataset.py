@@ -4,8 +4,9 @@ import re
 from collections import namedtuple
 CoveragePair = namedtuple('CoveragePair', ['project_name', 'focal_file_path', 'focal_method_name', 'coverage', 'focal_method', 'context', 'focal_file_skeleton', 'test_case', 'test_case_name', 'test_case_path', 'references'])
 
-
 class Dataset:
+    '''Directly load offline, calculated dataset of a repo.
+    '''
     def __init__(self, configs):
         self.configs = configs
         self.raw_data = None

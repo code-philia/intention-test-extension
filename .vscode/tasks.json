@@ -15,6 +15,19 @@
 				"kind": "build",
 				"isDefault": true
 			}
+		},
+		{
+			"label": "Watch Extension",
+			"type": "shell",
+			"command": "npm run watch",
+			"options": {
+				"cwd": "${workspaceFolder}/extension"
+			},
+			"isBackground": true,
+			"problemMatcher": "$tsc-watch",
+			"presentation": {
+				"reveal": "never"
+			}
 		}
 	]
 }

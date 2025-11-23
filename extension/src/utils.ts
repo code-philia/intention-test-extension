@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join as joinPath } from 'path';
 import * as vscode from 'vscode';
 
 type Input = vscode.TabInputText | vscode.TabInputTextDiff
@@ -72,4 +74,13 @@ export async function showANewEditorForInput(placeholderText?: string, selection
     });
 
     return cb;
+}
+
+export function getExtensionResource(context: vscode.ExtensionContext, relativePath: string): string {
+    return context.asAbsolutePath(joinPath('resources', relativePath));
+}
+
+export function getExtensionResourceText(context: vscode.ExtensionContext, relativePath: string): string {
+    const resourcePath = getExtensionResource(context, relativePath);
+    return readFileSync(resourcePath, 'utf8');
 }

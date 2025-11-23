@@ -1,11 +1,9 @@
 import os
 import json
-import shutil
 import re
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 import subprocess
-import sys
 import asyncio
 import threading
 import logging
@@ -80,7 +78,7 @@ class TestCaseRunner():
         test_case_with_log_coverage = []
         # run the generated test cases
         for each_test_case in tqdm(test_cases, ncols=80, desc='Running test cases'):
-            focal_file_path = each_test_case['focal_file_path']
+            focal_file_path = each_test_case['focal_path']
 
             generation_relative_path = each_test_case['test_case_path']
             tc_path = f"{self.configs.project_with_test_workspace}/{generation_relative_path}"
