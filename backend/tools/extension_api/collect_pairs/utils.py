@@ -1,9 +1,11 @@
 from ast import arg
 import subprocess
 from bs4 import BeautifulSoup
+import javalang
 import logging
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 method_lines_jar_path_new = "../javaparser_utils/javaparser-method-lines-1.0-SNAPSHOT-shaded.jar"
 method_lines_jar_path_old = "../javaparser_utils/javaparser-method-lines-old-1.0-SNAPSHOT-shaded.jar"
@@ -346,3 +348,201 @@ def get_unused_classes_lines(filepath):
     
     # print(dic)
     return dic
+
+def type_to_str(t):
+    """
+    Convert a javalang type node into its Java source code representation.
+    Supports both BasicType and ReferenceType, including type arguments and dimensions.
+    """
+    if t is None:
+        return ""
+    if isinstance(t, javalang.tree.BasicType):
+        type_str = t.name
+    elif isinstance(t, javalang.tree.ReferenceType):
+        type_str = t.name
+        if t.arguments:
+            args_str = ", ".join(type_argument_to_str(arg) for arg in t.arguments)
+            type_str += f"<{args_str}>"
+    else:
+        type_str = str(t)
+    if hasattr(t, 'dimensions') and t.dimensions:
+        type_str += "[]" * len(t.dimensions)
+    return type_str
+
+
+def type_argument_to_str(arg):
+    """
+    Convert a TypeArgument node to its source code representation.
+    If the argument represents a wildcard (i.e. its type is None), simply return "?".
+    Otherwise, if a bound is specified, include it.
+    """
+    if isinstance(arg, javalang.tree.TypeArgument):
+        # Wildcard with no bound, e.g. <?>
+        if arg.type is None:
+            return "?"
+        # Wildcard with a bound, e.g. <? extends Number>
+        if arg.pattern_type:
+            return f"? {arg.pattern_type} {type_to_str(arg.type)}"
+        else:
+            return type_to_str(arg.type)
+    else:
+        return type_to_str(arg)
+
+
+def format_parameter(param):
+    """
+    Format a method or constructor parameter, including modifiers such as 'final'.
+    """
+    mods = ""
+    if param.modifiers and "final" in param.modifiers:
+        mods = "final "
+    type_str = type_to_str(param.type)
+    return f"{mods}{type_str} {param.name}"
+
+def expr_to_str(expr):
+    """
+    Convert an expression node back into Java source code.
+    This function handles literals, member references, method invocations,
+    array initializers/creators, class creators, class references, binary
+    and ternary expressions.
+    """
+    if expr is None:
+        return ""
+    if isinstance(expr, javalang.tree.Literal):
+        return expr.value
+    elif isinstance(expr, javalang.tree.MemberReference):
+        qualifier = f"{expr.qualifier}." if expr.qualifier else ""
+        return f"{qualifier}{expr.member}"
+    elif isinstance(expr, javalang.tree.MethodInvocation):
+        qualifier = f"{expr.qualifier}." if expr.qualifier else ""
+        args = ", ".join(expr_to_str(arg) for arg in expr.arguments)
+        return f"{qualifier}{expr.member}({args})"
+    elif isinstance(expr, javalang.tree.ArrayInitializer):
+        elements = ", ".join(expr_to_str(e) for e in expr.initializers)
+        return f"{{ {elements} }}"
+    elif isinstance(expr, javalang.tree.ArrayCreator):
+        type_str = type_to_str(expr.type)
+        dims = "[]" * len(expr.dimensions) if expr.dimensions else ""
+        initializer = ""
+        if expr.initializer is not None:
+            initializer = " " + expr_to_str(expr.initializer)
+        return f"new {type_str}{dims}{initializer}"
+    elif isinstance(expr, javalang.tree.ClassCreator):
+        type_str = type_to_str(expr.type)
+        args = ", ".join(expr_to_str(arg) for arg in expr.arguments)
+        return f"new {type_str}({args})"
+    elif isinstance(expr, javalang.tree.ClassReference):
+        # Handle class literals like CronConverter.class
+        return f"{type_to_str(expr.type)}.class"
+    elif isinstance(expr, javalang.tree.BinaryOperation):
+        left = expr_to_str(expr.operandl)
+        right = expr_to_str(expr.operandr)
+        return f"{left} {expr.operator} {right}"
+    elif isinstance(expr, javalang.tree.TernaryExpression):
+        cond = expr_to_str(expr.condition)
+        if_true = expr_to_str(expr.if_true)
+        if_false = expr_to_str(expr.if_false)
+        return f"{cond} ? {if_true} : {if_false}"
+    else:
+        return str(expr)
+
+def order_modifiers(modifiers):
+    """
+    Order modifiers according to conventional Java ordering.
+    """
+    order = ['public', 'protected', 'private', 'abstract', 'static', 'final',
+             'transient', 'volatile', 'synchronized', 'native', 'strictfp']
+    sorted_mods = sorted(modifiers, key=lambda x: order.index(x) if x in order else 100)
+    return " ".join(sorted_mods)
+
+def process_type(type_decl, indent=""):
+    """
+    Process a class or interface declaration (including inner types) and return its skeleton as a list of lines.
+    """
+    lines = []
+    # Build the header line with modifiers, type keyword, name, type parameters,
+    # and extends/implements clauses.
+    modifiers = order_modifiers(type_decl.modifiers) + " " if type_decl.modifiers else ""
+    type_keyword = "class" if isinstance(type_decl, javalang.tree.ClassDeclaration) else "interface"
+    header = f"{indent}{modifiers}{type_keyword} {type_decl.name}"
+    if hasattr(type_decl, 'type_parameters') and type_decl.type_parameters:
+        tparams = ", ".join(tp.name for tp in type_decl.type_parameters)
+        header += f"<{tparams}>"
+    if isinstance(type_decl, javalang.tree.ClassDeclaration):
+        if type_decl.extends is not None:
+            header += " extends " + type_to_str(type_decl.extends)
+        if type_decl.implements:
+            header += " implements " + ", ".join(type_to_str(t) for t in type_decl.implements)
+    elif isinstance(type_decl, javalang.tree.InterfaceDeclaration):
+        if type_decl.extends:
+            header += " extends " + ", ".join(type_to_str(t) for t in type_decl.extends)
+    header += " {"
+    lines.append(header)
+
+    # Process fields
+    for field in type_decl.fields:
+        mod_field = order_modifiers(field.modifiers) + " " if field.modifiers else ""
+        field_type = type_to_str(field.type)
+        declarators = []
+        for declarator in field.declarators:
+            decl = declarator.name
+            if declarator.initializer is not None:
+                decl += " = " + expr_to_str(declarator.initializer)
+            declarators.append(decl)
+        decls_str = ", ".join(declarators)
+        lines.append(f"{indent}    {mod_field}{field_type} {decls_str};")
+    if type_decl.fields:
+        lines.append("")
+
+    # Process constructors (only for classes)
+    if isinstance(type_decl, javalang.tree.ClassDeclaration):
+        for constructor in type_decl.constructors:
+            mod_ctor = order_modifiers(constructor.modifiers) + " " if constructor.modifiers else ""
+            params = ", ".join(format_parameter(param) for param in constructor.parameters)
+            lines.append(f"{indent}    {mod_ctor}{type_decl.name}({params})")
+
+    # Process methods
+    for method in type_decl.methods:
+        mod_method = order_modifiers(method.modifiers) + " " if method.modifiers else ""
+        return_type = type_to_str(method.return_type) if method.return_type else "void"
+        params = ", ".join(format_parameter(param) for param in method.parameters)
+        end_char = ";" if isinstance(type_decl, javalang.tree.InterfaceDeclaration) else ""
+        lines.append(f"{indent}    {mod_method}{return_type} {method.name}({params}){end_char}")
+
+    # Process inner types (if any) found in the body.
+    if hasattr(type_decl, 'body'):
+        for element in type_decl.body:
+            if isinstance(element, (javalang.tree.ClassDeclaration, javalang.tree.InterfaceDeclaration)):
+                lines.append("")  # add a blank line before inner type
+                inner_lines = process_type(element, indent + "    ")
+                lines.extend(inner_lines)
+
+    lines.append(f"{indent}}}")
+    return lines
+
+def skeletonize_java_code(java_code):
+    tree = javalang.parse.parse(java_code)
+    lines = []
+    # Package declaration
+    if tree.package:
+        lines.append(f"package {tree.package.name};\n")
+    # Import declarations
+    for imp in tree.imports:
+        line = "import "
+        if imp.static:
+            line += "static "
+        line += imp.path
+        if imp.wildcard:
+            line += ".*"
+        line += ";"
+        lines.append(line)
+    if tree.imports:
+        lines.append("")
+
+    # Process each top-level type
+    for type_decl in tree.types:
+        type_lines = process_type(type_decl)
+        lines.extend(type_lines)
+        lines.append("")  # blank line between top-level types
+
+    return "\n".join(lines)

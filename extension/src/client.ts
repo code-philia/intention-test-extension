@@ -102,6 +102,19 @@ export class TesterSession {
         }
     }
 
+    async generateCoverageAndDescription(projectPath: string, useJacoco: boolean, testSuffix: string): Promise<void> {
+        try {
+            await this.makeHttpRequest('/generate_data', { 
+                project_path: projectPath,
+                use_jacoco: useJacoco,
+                test_suffix: testSuffix
+            });
+        } catch (error) {
+            console.error('Failed to generate coverage and description:', error);
+            throw error;
+        }
+    }
+
     private async handleClientRequest(requestData: any): Promise<void> {
         console.log('Received client request data:', requestData);
         

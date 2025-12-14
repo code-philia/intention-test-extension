@@ -81,6 +81,47 @@ export function activate(context: vscode.ExtensionContext): void {
                 session.changeJunitVersion(inputVersion);
             }
         ),
+        vscode.commands.registerCommand('intentionTest.generateCoverageAndDescription',
+            async () => {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (!workspaceFolders || workspaceFolders.length === 0) {
+                    vscode.window.showErrorMessage('No workspace folder open');
+                    return;
+                }
+                const projectPath = workspaceFolders[0].uri.fsPath;
+
+                const connectToPort = vscode.workspace.getConfiguration('intentionTest').get('port');
+                if (typeof connectToPort !== 'number') {
+                    vscode.window.showErrorMessage('Tester: Port number is not set');
+                    return;
+                };
+
+                const enableJacoco = vscode.workspace.getConfiguration('intentionTest').get('enableJacoco', false);
+                const testSuffix = vscode.workspace.getConfiguration('intentionTest').get('testSuffix', 'Test');
+
+                const session = new TesterSession(
+                    () => {},
+                    (e) => {
+                        vscode.window.showErrorMessage(`Lost connection to the server: ${e}`);
+                    },
+                    () => {},
+                    connectToPort
+                );
+
+                vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: "Generating coverage and test description...",
+                    cancellable: false
+                }, async (progress) => {
+                    try {
+                        await session.generateCoverageAndDescription(projectPath, enableJacoco, testSuffix);
+                        vscode.window.showInformationMessage('Successfully generated coverage and test description.');
+                    } catch (e) {
+                        vscode.window.showErrorMessage(`Failed to generate data: ${e}`);
+                    }
+                });
+            }
+        ),
         virtualFileSystemRegister
     );
     setWebRoot(context.asAbsolutePath('../web/dist'));
