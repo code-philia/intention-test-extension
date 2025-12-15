@@ -3,7 +3,7 @@ import '@douyinfe/semi-ui/dist/css/semi.min.css';
 import type { Message, RoleConfig } from '@douyinfe/semi-ui/lib/es/chat/interface';
 import 'prismjs/plugins/autoloader/prism-autoloader.min.js';
 import 'prismjs/themes/prism-tomorrow.min.css';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import './App.css';
 import testLogo from './assets/test-tube.svg';
 
@@ -100,9 +100,35 @@ function App() {
   //   }
   // }, [messages])
 
+  const lastRequestAnimationFrame: RefObject<number | undefined> = useRef(undefined);
+
+  // Custom smooth scroll with bezier curve animation
+  const smoothScrollToBottom = useCallback(() => {
+    if (lastRequestAnimationFrame.current !== undefined) {
+      cancelAnimationFrame(lastRequestAnimationFrame.current);
+    }
+    
+    const animateScroll = () => {
+      const startY = document.documentElement.scrollTop;
+      const targetY = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+      const distance = targetY - startY;
+
+      if (distance <= 10) return;
+
+      const currentY = startY + (Math.min(distance, Math.max(distance * 0.1, 10)));
+      document.documentElement.scrollTo(0, currentY);
+      
+      if (currentY < targetY) {
+        lastRequestAnimationFrame.current = requestAnimationFrame(animateScroll);
+      }
+    };
+    
+    lastRequestAnimationFrame.current = requestAnimationFrame(animateScroll);
+  }, []);
+
   useEffect(() => {
-    document.documentElement.scrollTo({ behavior: 'smooth', top: document.documentElement.scrollHeight });
-  }, [messages])
+    smoothScrollToBottom();
+  }, [messages, smoothScrollToBottom])
 
   // Listen for messages from the window (similar to index.js logic)
   useEffect(() => {
@@ -130,7 +156,7 @@ function App() {
               // Only update existing message if content has actually changed
               if (existingMessage.content !== msg.content) {
                 return prev.map(m => m.id === messageId 
-                  ? { ...m, content: msg.content, createAt: Date.now() }
+                  ? { ...msg, createAt: Date.now() }
                   : m
                 );
               }
@@ -158,6 +184,8 @@ function App() {
       vscode.postMessage({ cmd: 'send', content });
     }
   }, [addMessage]);
+
+  console.log('Rendering with messages:', messages);
 
   return (
     <div>

@@ -47,3 +47,9 @@
 .semi-chat .semi-button {
   width: 18px;
 }
+
+.semi-chat h1 {
+  font-size: 18px !important;
+  margin-block: 6px 6px !important;
+  line-height: 36px !important;
+}

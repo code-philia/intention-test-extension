@@ -1,0 +1,7 @@
+[MAIN]
+disable=
+    W1203,  ; Use lazy % instead of f-string interpolation in logging
+    W0718,  ; Catch too general Exception
+    W0612,  ; Unused variable
+    W0613,  ; Unused argument
+    W1201,  ; Use lazy % formatting in logging

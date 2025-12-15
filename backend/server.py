@@ -12,6 +12,7 @@ from threading import Lock, RLock
 from typing import Dict, List, Optional, Union
 
 from flask import Flask, Response, jsonify, request, stream_with_context
+from type import AbstractMessageSyncHandler
 from core import run_test_generation_chat
 
 app = Flask(__name__)
@@ -26,7 +27,7 @@ logging.basicConfig(
 )
 
 # Global dictionary to store active sessions with thread safety
-active_sessions: Dict[str, "ModelQuerySession"] = {}
+active_sessions: Dict[str, "ExtensionQuerySession"] = {}
 sessions_lock = RLock()  # Reentrant lock for session access
 
 # Session cleanup tracking
@@ -172,7 +173,7 @@ class NoRefMessage:
         return json.dumps({"type": "noreference", "data": self.data}).encode()
 
 
-class ModelQuerySession:
+class ExtensionQuerySession(AbstractMessageSyncHandler):
     """Session persistent data with improved resource management."""
 
     required_fields = [
@@ -188,6 +189,7 @@ class ModelQuerySession:
         self.raw_data = raw_data
         self.request = flask_request  # not used for writing responses anymore
         self.messages = []
+        self.messages_dict = {}
         self.messages_lock = Lock()  # Protect messages list
         self.junit_version = app_config.get_junit_version()
         self.message_id_counter = 0  # Counter for unique message IDs
@@ -257,30 +259,20 @@ class ModelQuerySession:
 
     def update_messages(self, messages):
         """Sync all messages to the client with unique IDs and thread safety"""
-        self.last_activity = time.time()  # Update activity timestamp
-        
-        # Add unique IDs to messages that don't already have them
-        messages_with_ids = []
-        # FIXME don't keep an ID counter in ModelQuerySession
-        self.message_id_counter = 0
-        for msg in messages:
-            if isinstance(msg, dict):
-                # Create a copy and add ID if not present
-                msg_copy = msg.copy()
-                if "id" not in msg_copy:
-                    self.message_id_counter += 1
-                    msg_copy["id"] = f"{self.session_id}_msg_{self.message_id_counter}"
-                messages_with_ids.append(msg_copy)
-            else:
-                messages_with_ids.append(msg)
+        if messages is None:
+            messages = []
 
-        data_to_send = {"session_id": self.session_id, "messages": messages_with_ids}
+        self.last_activity = time.time()  # Update activity timestamp
+
+        msg_id_cnt = 0
+        messages_copy = list(map(lambda msg: {**msg}, messages))
+        for msg in messages_copy:
+            msg_id_cnt += 1
+            msg["id"] = f"{self.session_id}_msg_{msg_id_cnt}"
+        data = {"session_id": self.session_id, "messages": messages_copy}
         
         with self.messages_lock:
-            self.messages.append(ModelMessage(data_to_send).response())
-            # # Prevent memory accumulation - keep only recent messages
-            # if isinstance(self.messages, list) and len(self.messages) > 100:
-            #     self.messages = self.messages[-50:]  # Keep last 50 messages
+            self.messages.append(ModelMessage(data).response())
 
     def write_start_message(self):
         self.last_activity = time.time()
@@ -333,8 +325,8 @@ class ModelQuerySession:
             self.messages.append(message)
 
     def request_client_response(
-        self, prompt: str, response_type: str = "text", options: Optional[List[str]] = None
-    ) -> Optional[str]:
+        self, prompt: str, response_type: str = "text", options: list[str] | None = None
+    ) -> str | None:
         """
         Request a response from the client. This will send a message to the client
         asking for input and then wait for the client to respond.
@@ -373,7 +365,7 @@ class ModelQuerySession:
         # Wait for client response
         try:
             response = self.client_responses.get(timeout=self.response_timeout)
-            logger.info("Session %s: Received client response - %s", self.session_id, response)
+            logger.info("Session %s: Received client response -\n%s", self.session_id, response)
             self.last_activity = time.time()
             return response
         except queue.Empty:
@@ -413,7 +405,7 @@ class ModelQuerySession:
 # Generator function for streaming events with improved thread safety
 
 
-def event_stream(session: ModelQuerySession):
+def event_stream(session: ExtensionQuerySession):
     last_index = 0
     # Continue streaming until session is finished and all messages have been sent
     while not session.finished or (isinstance(session.messages, list) and last_index < len(session.messages)):
@@ -443,7 +435,7 @@ def event_stream(session: ModelQuerySession):
 # Updated assign_to_session to work with Flask's request
 
 
-def assign_to_session(query_text: str, flask_request) -> Optional[ModelQuerySession]:
+def assign_to_session(query_text: str, flask_request) -> Optional[ExtensionQuerySession]:
     try:
         query_data = json.loads(query_text)
         if query_data["type"] != "query":
@@ -451,7 +443,7 @@ def assign_to_session(query_text: str, flask_request) -> Optional[ModelQuerySess
 
         # Generate secure session ID using UUID
         session_id = str(uuid.uuid4())
-        new_session = ModelQuerySession(session_id, query_data["data"], flask_request)
+        new_session = ExtensionQuerySession(session_id, query_data["data"], flask_request)
         return new_session
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.error("Error creating session: %s", e)

@@ -4,6 +4,7 @@ import time
 import logging
 
 from openai import OpenAI
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,8 @@ class Agent:
         self.seed = 1203
         self.max_completion_tokens = 5120
 
-    def get_response(self, messages, n=1, skip_deepseek_think: bool=False, stream_callback=None):
-        if self.model_name == 'gpt-4o' or self.model_name == 'gpt-3.5-turbo':
+    def get_response(self, messages, n=1, skip_deepseek_think: bool=False, stream_callback=None) -> list[str]:
+        if self.model_name in ('gpt-4o', 'gpt-3.5-turbo'):
             if self.system_prompt:
                 messages = [{'role': 'system', 'content': self.system_prompt}] + messages
             response = self._get_gpt_response(messages, n=n, stream_callback=stream_callback)
@@ -44,7 +45,7 @@ class Agent:
             raise ValueError(f"Unknown LLM name: {self.model_name}")
         return response
 
-    def _get_gpt_response(self, messages, n=1, stream_callback=None):
+    def _get_gpt_response(self, messages, n=1, stream_callback=None) -> list[str]:
         response = []
         max_tries = n + 2
         n_tries = 0
@@ -85,21 +86,8 @@ class Agent:
                             # Call the update callback with the updated messages
                             stream_callback(updated_messages)
                             logger.debug(f'Streaming update: {collected_content[-50:]}')
-
-                    # Create a response-like object for consistency
-                    class StreamMessage:
-                        def __init__(self, content):
-                            self.content = content
                     
-                    class StreamChoice:
-                        def __init__(self, content):
-                            self.message = StreamMessage(content)
-                    
-                    class StreamResponse:
-                        def __init__(self, content):
-                            self.choices = [StreamChoice(content)]
-                    
-                    each_response = StreamResponse(collected_content)
+                    each_response = StreamResponse(choices=[StreamChoice(message=StreamMessage(content=collected_content))])
                 else:
                     each_response = self.client.chat.completions.create(
                         model=self.model_name,
@@ -117,17 +105,6 @@ class Agent:
                 if n_tries > max_tries:
                     logger.error(f'Failed to generate after {max_tries} attempts')
                     # Create an error response object
-                    class ErrorMessage:
-                        def __init__(self):
-                            self.content = '```\n\n[ERROR] Failed to generate\n\n```'
-                    
-                    class ErrorChoice:
-                        def __init__(self):
-                            self.message = ErrorMessage()
-                    
-                    class ErrorResponse:
-                        def __init__(self):
-                            self.choices = [ErrorChoice()]
                     
                     each_response = ErrorResponse()
                     break
@@ -176,7 +153,7 @@ class Agent:
                     if len(part_2_1_lines) > 10:
                         part_2_1_lines = part_2_1_lines[:len(part_2_1_lines)-10]
                     else:
-                        raise ValueError(f"Failed to reduce the length of the input: {part_2_1} to address:\n{e}")
+                        raise ValueError(f"Failed to reduce the length of the input: {part_2_1} to address:\n{e}") from e
                     
                     part_2_1 = '\n'.join(part_2_1_lines)
                     messages[1]['content'] = part_1 + '(with some details omitted):\n```\n' + part_2_1 + '\n```' + part_2_2
@@ -222,6 +199,23 @@ class Agent:
                     max_completion_tokens=self.max_completion_tokens,
                     n=1
                 )
+                logger.info(f'Time consuming for one generation: {time.time()-s_time:.2f} seconds\n\n')
+                logger.info(f'Response:\n{each_response_raw.choices[0].message.content}\n\n\n')
+                
+                each_response = self.remove_thinking(each_response_raw.choices[0].message.content)
+                if each_response is None:
+                    messages[0]['content'] += '\n\n<think>\n\n</think>\n\n'
+                    logger.info('Seems a too long thinking. Enforcing the model to skip thinking.\n')
+                    logger.info('Messages (after modified):' + str(messages) + '\n\n\n')
+                    logger.info('Response:\n' + (each_response_raw.choices[0].message.content or '') + '\n\n\n')
+                    n_tries += 1
+
+                    if n_tries <= max_tries:
+                        continue
+                    each_response = '```\nFailed to generate\n```'
+
+                response.append(each_response)
+
             except Exception as e:
                 # the input is too long
                 if 'Please reduce the length' in str(e):
@@ -239,24 +233,6 @@ class Agent:
 
                     continue
 
-            print(f'Time consuming for one generation: {time.time()-s_time:.2f} seconds\n\n')
-            print(f'[INFO] Response:\n{each_response_raw.choices[0].message.content}\n\n\n')
-            
-            each_response = self.remove_thinking(each_response_raw.choices[0].message.content)
-            if each_response is None:
-                messages[0]['content'] += '\n\n<think>\n\n</think>\n\n'
-                print('Seems a too long thinking. Enforcing the model to skip thinking.\n')
-                print('Messages (after modified):', messages, '\n\n\n')
-                print('Response:\n', each_response_raw.choices[0].message.content, '\n\n\n')
-                n_tries += 1
-
-                if n_tries < max_tries:
-                    continue
-                else:
-                    each_response = '```\nFailed to generate\n```'
-
-            response.append(each_response)
-        
         if n == 1:
             response = response[0]
 
@@ -301,13 +277,12 @@ class Agent:
 
 
 class TestDescAgent(Agent):
-    def __init__(self, llm_name: str):
-        super().__init__(llm_name)
-    
     def generate_test_desc(self, test_case, focal_method):
         prompt = self.construct_prompt(test_case, focal_method)
         messages = [{'role': 'user', 'content': prompt}]
 
+        is_success = False
+        response = ''
         for _ in range(3):
             response = self.get_response(messages)
             is_success = self.check_generation(response)
@@ -321,12 +296,12 @@ class TestDescAgent(Agent):
         return response
 
     def construct_prompt(self, test_case, focal_method):
-        instruction = f"""# Test Case\n```\n{test_case}\n```\n\n# Focal Method\n```\n{focal_method}\n```\n\n# Objective\n// Identifies and briefly describes the special focus or objective of #Test Case#. \n\n# Preconditions\n// Describes the required state of the test environment and test data and any special constraints pertaining to the execution of #Test Case#. Also, specifies each action required to bring the test item into a state where the expected result can be compared to the actual results. The level of detail provided by the descriptions should be tailored to fit the knowledge of the test executors.\n\n# Expected Results\n// Specifies the expected outputs and behaviour required of the test item in response to the inputs that are given to the test item when it is in its precondition state. Provides the expected values (with tolerances where appropriate) for each required output.\n\n# Instruction\nPlease generate the #Objective#, #Preconditions#, and #Expected Results# of #Test Case#.\nEnsure that the output follows the expected format:\n```\n# Objective\n...\n\n# Preconditions\n1. ...\n2. ...\n...\n\n# Expected Results\n1. ...\n2. ...\n...\n```\n\n# Requirements\n1. The length of #Objective# must be less than fifty words.\n2. The total length of #Preconditions# and #Expected Results# must be less than two hundred words.\n3. The program elements in #Objective#, #Preconditions#, and #Expected Results# must be enclosed by a pair of backticks, such as `ClassA` and `methodInov()`.\n4. Ensure the #Objective#, #Preconditions#, and #Expected Results# are written in a natural, human-like manner. MUST avoid containing many program elements; instead, use clear and natural language."""
+        instruction = f"""# Test Case\n```\n{test_case}\n```\n\n# Focal Method\n```\n{focal_method}\n```\n\n# Objective\n// Identifies and briefly describes the special focus or objective of #Test Case#. \n\n# Preconditions\n// Describes the required state of the test environment and test data and any special constraints pertaining to the execution of #Test Case#. Also, specifies each action required to bring the test item into a state where the expected result can be compared to the actual results. The level of detail provided by the descriptions should be tailored to fit the knowledge of the test executors.\n\n# Expected Results\n// Specifies the expected outputs and behavior required of the test item in response to the inputs that are given to the test item when it is in its precondition state. Provides the expected values (with tolerances where appropriate) for each required output.\n\n# Instruction\nPlease generate the #Objective#, #Preconditions#, and #Expected Results# of #Test Case#.\nEnsure that the output follows the expected format:\n```\n# Objective\n...\n\n# Preconditions\n1. ...\n2. ...\n...\n\n# Expected Results\n1. ...\n2. ...\n...\n```\n\n# Requirements\n1. The length of #Objective# must be less than fifty words.\n2. The total length of #Preconditions# and #Expected Results# must be less than two hundred words.\n3. The program elements in #Objective#, #Preconditions#, and #Expected Results# must be enclosed by a pair of backticks, such as `ClassA` and `methodInov()`.\n4. Ensure the #Objective#, #Preconditions#, and #Expected Results# are written in a natural, human-like manner. MUST avoid containing many program elements; instead, use clear and natural language."""
 
         return instruction
 
     def polish_test_desc(self, test_desc):
-        prompt = f"""# Test Case Description\n```\n{test_desc}\n```\n\n# Instruction\nRewrite the #Test Case Description# to make it more natural and human-like by translating the program elements (enclosed by `) to natural language descprition.\nFor example:\n1. Split the camel words and then transform them from program elements to natural language descriptions (such as `IpAddress` -> ip address).\n2. Using natural language to describe invocation (such as `Obj.getPrefix(Param)` -> get the prefix of Param, and `program.version=0.1` -> version of program is 0.1).\n\nAdditionally, ensure that the output follows the expected format:\n```\n# Objective\n...\n\n# Preconditions\n1. ...\n2. ...\n...\n\n# Expected Results\n1. ...\n2. ...\n...\n```\n\n# Requirements\n1. The length of #Objective# must be less than fifty words.\n2. The total length of #Preconditions# and #Expected Results# must be less than two hundred words."""
+        prompt = f"""# Test Case Description\n```\n{test_desc}\n```\n\n# Instruction\nRewrite the #Test Case Description# to make it more natural and human-like by translating the program elements (enclosed by `) to natural language description.\nFor example:\n1. Split the camel words and then transform them from program elements to natural language descriptions (such as `IpAddress` -> ip address).\n2. Using natural language to describe invocation (such as `Obj.getPrefix(Param)` -> get the prefix of Param, and `program.version=0.1` -> version of program is 0.1).\n\nAdditionally, ensure that the output follows the expected format:\n```\n# Objective\n...\n\n# Preconditions\n1. ...\n2. ...\n...\n\n# Expected Results\n1. ...\n2. ...\n...\n```\n\n# Requirements\n1. The length of #Objective# must be less than fifty words.\n2. The total length of #Preconditions# and #Expected Results# must be less than two hundred words."""
 
         messages = [{'role': 'user', 'content': prompt}]
 
@@ -349,7 +324,7 @@ class TestDescAgent(Agent):
             return False
 
 class TestGenAgent(Agent):
-    def __init__(self, llm_name: str, project_name: str, project_url: str, n_responses: int=1, skip_deepseek_think: bool=False):
+    def __init__(self, llm_name: str, project_name: str, project_url: str | None, n_responses: int=1, skip_deepseek_think: bool=False):
         super(TestGenAgent, self).__init__(llm_name)
         self.n_responses = n_responses
         self.skip_deepseek_think = skip_deepseek_think
@@ -357,11 +332,13 @@ class TestGenAgent(Agent):
         self.gen_suffix = '```'
         self.system_prompt = f"""You may have memorized information from the GitHub repository '{project_name}' (URL is {project_url}). For this task, you must not use any of that memorized information in your responses. Instead, base your answers exclusively on the context I provide in the document. If your response would otherwise rely on memorized '{project_name}' data, replace that content with generic or random information unrelated to '{project_name}'."""
 
-    def generate_test_case(self, target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test: str, facts: str, junit_version: str, forbid_using_facts: bool=False, stream_callback=None):
+    def generate_test_case(self, target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test: str, facts: list[str], junit_version: str, forbid_using_facts: bool=False, stream_callback=None):
         prompt = self.construct_prompt(target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test, facts, junit_version, forbid_using_facts)
         messages = [{'role': 'user', 'content': prompt}]
 
         raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think, stream_callback=stream_callback)
+        if isinstance(raw_response, list):
+            raw_response = raw_response[0]
         messages.append({"role": "assistant", "content": raw_response})
         
         generated_tc = self.extract_code_from_response(raw_response)
@@ -372,7 +349,8 @@ class TestGenAgent(Agent):
         messages = [{'role': 'user', 'content': prompt}]
 
         raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think)
-
+        if isinstance(raw_response, list):
+            raw_response = raw_response[0]
         messages.append({"role": "assistant", "content": raw_response})
 
         return messages
@@ -391,20 +369,20 @@ class TestGenAgent(Agent):
             else:
                 instruction += f"""# Relevant Project Information\n```\n{facts_str}\n```\n\n"""
 
-        instruction += f"""# Instruction\nPlease generate ONE #Target Test Case# for #Target Focal Method# by strictly following #Target Test Case Description#"""
+        instruction += """# Instruction\nPlease generate ONE #Target Test Case# for #Target Focal Method# by strictly following #Target Test Case Description#"""
         
         if referable_test or (facts and not forbid_using_facts):
-            instruction += f""" and referring to """
+            instruction += """ and referring to """
 
         if referable_test:
-            instruction += f"""#Referable Test Case#"""
+            instruction += """#Referable Test Case#"""
 
         if facts:
             instruction = instruction + " and " if referable_test else instruction
             if forbid_using_facts:
-                instruction += f"""#Prohibited APIs#.\nNOTE: #Prohibited APIs# contains the APIs that MUST NOT be included in your generated #Target Test Case#.\n\n"""
+                instruction += """#Prohibited APIs#.\nNOTE: #Prohibited APIs# contains the APIs that MUST NOT be included in your generated #Target Test Case#.\n\n"""
             else:
-                instruction += f"""#Relevant Project Information#.\nNOTE: #Relevant Project Information# contains key facts about the project. These facts MUST be FULLY reflected in your generated #Target Test Case#.\n\n"""
+                instruction += """#Relevant Project Information#.\nNOTE: #Relevant Project Information# contains key facts about the project. These facts MUST be FULLY reflected in your generated #Target Test Case#.\n\n"""
             
         else:
             instruction += ".\n\n"
@@ -415,7 +393,7 @@ class TestGenAgent(Agent):
 
 
 class TestRefineAgent(Agent):
-    def __init__(self, llm_name: str, project_name: str, project_url: str, n_responses, skip_deepseek_think: bool=False):
+    def __init__(self, llm_name: str, project_name: str, project_url: str | None, n_responses, skip_deepseek_think: bool=False):
         super().__init__(llm_name)
         self.n_responses = n_responses
         self.skip_deepseek_think = skip_deepseek_think
@@ -423,12 +401,14 @@ class TestRefineAgent(Agent):
         self.gen_suffix = '```'
         self.system_prompt = f"""You may have memorized information from the GitHub repository '{project_name}' (URL is {project_url}). For this task, you must not use any of that memorized information in your responses. Instead, base your answers exclusively on the context I provide in the document. If your response would otherwise rely on memorized '{project_name}' data, replace that content with generic or random information unrelated to '{project_name}'."""
     
-    def refine(self, gen_test_case, error_msg, target_focal_method, target_context, target_test_case_desc, facts: list, forbid_using_facts: bool=False):
+    def refine(self, gen_test_case, error_msg, target_focal_method, target_context, target_test_case_desc, facts: list, forbid_using_facts: bool=False, stream_callback=None):
         prompt = self.construct_prompt(gen_test_case, error_msg, target_focal_method, target_context, target_test_case_desc, facts, forbid_using_facts)
         messages = [{'role': 'user', 'content': prompt}]
 
-        raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think)
-        
+        raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think, stream_callback=stream_callback)
+        if isinstance(raw_response, list):
+            raw_response = raw_response[0]
+
         generated_tc = self.extract_code_from_response(raw_response)
 
         messages.append({"role": "assistant", "content": raw_response})
@@ -447,16 +427,40 @@ class TestRefineAgent(Agent):
 
         instruction += f"""# Generated Target Test Case\n```\n{gen_test_case}\n```\n\n# Error Message\nWhen compiling and executing #Generated Target Test Case#, encounter the following errors:\n```\n{error_msg}\n```\n\n"""
 
-        instruction += f"""# Instruction\nPlease modify #Generated Target Test Case# to resolve the errors shown in #Error Message#. """
+        instruction += """# Instruction\nPlease modify #Generated Target Test Case# to resolve the errors shown in #Error Message#. """
         
         if facts:
             if forbid_using_facts:
-                instruction += f"""NOTE: #Prohibited APIs# contains the APIs that MUST NOT be included in your generated #Target Test Case#.\n\n"""
+                instruction += """NOTE: #Prohibited APIs# contains the APIs that MUST NOT be included in your generated #Target Test Case#.\n\n"""
             else:
-                instruction += f"""#Relevant Project Information# provides some key facts in the project that MUST be considered to resolve the errors.\n\n"""
+                instruction += """#Relevant Project Information# provides some key facts in the project that MUST be considered to resolve the errors.\n\n"""
         else:
             instruction += "\n\n"
         
         instruction += f"""# Output Requirements\nYour final output must strictly adhere to the following format:\n1: Begin with the exact prefix: "{self.gen_prefix}".\n2: End with the exact suffix: "{self.gen_suffix}".\nEnsure that no additional text appears before the prefix or after the suffix."""
 
         return instruction
+
+@dataclass
+class StreamMessage:
+    content: str
+
+@dataclass
+class StreamChoice:
+    message: StreamMessage
+
+@dataclass
+class StreamResponse:
+    choices: list[StreamChoice]
+
+@dataclass
+class ErrorMessage:
+    content: str = '```\n\n[ERROR] Failed to generate\n\n```'
+
+@dataclass
+class ErrorChoice:
+    message: ErrorMessage = field(default_factory=ErrorMessage)
+
+@dataclass
+class ErrorResponse:
+    choices: list[ErrorChoice] = field(default_factory=lambda: [ErrorChoice()])

@@ -5,6 +5,7 @@ import pathlib
 import re
 import sys
 
+from type import AbstractMessageSyncHandler
 from configs import Configs
 from dataset import Dataset
 from generator import IntentionTester
@@ -123,10 +124,10 @@ def run_test_generation_chat(
     test_desc: str,
     project_path: str,
     focal_file_path: str,
-    query_session=None,
+    query_session: AbstractMessageSyncHandler | None=None,
 ):
     logger.info(
-        "Running test generation chat\ntarget_focal_method: %s\ntarget_focal_file: %s\ntest_desc: %s\nproject_path: %s\nfocal_file_path: %s",
+        "Running test generation chat\ntarget_focal_method:\n%s\ntarget_focal_file: %s\ntest_desc: %s\nproject_path: %s\nfocal_file_path: %s",
         target_focal_method,
         target_focal_file,
         test_desc,
@@ -159,9 +160,7 @@ def run_test_generation_chat(
         intention_tester.connect_to_request_session(query_session)
 
     # /intention_test_extension/data/repos_removing_test/spark/src/test/java/spark/embeddedserver/jetty/EmbeddedJettyFactoryTest.java
-    project_without_test_file_dir = os.path.dirname(
-        configs.project_without_test_file_path
-    )
+    project_without_test_file_dir = project_path
 
     without_test_focal_file_path = (
         pathlib.Path(project_without_test_file_dir)
@@ -213,7 +212,7 @@ def run_test_generation_chat(
         )  # Use existing if not in fact data
     else:
         logger.warning(
-            "No matching fact data found for focal method: %s", focal_method_name
+            "No matching fact data found for focal method:\n%s", focal_method_name
         )
 
     ref_score, ref_focal_method, ref_test_case = retrieve_reference_offline_by_name(
@@ -225,6 +224,9 @@ def run_test_generation_chat(
         top_1_reference_tc_rag = references_tc_rag[0]
     else:
         top_1_reference_tc_rag = None
+
+    if isinstance(top_1_reference_tc_rag, list):
+        top_1_reference_tc_rag = "\n".join(top_1_reference_tc_rag)
 
     # # collect facts
     facts, facts_sim, usages, usages_sim = get_crucial_facts_offline_by_name(
@@ -243,7 +245,7 @@ def run_test_generation_chat(
             facts=facts,
             junit_version=str(query_session.junit_version)
             if query_session is not None
-            else 5,
+            else "5",
         )
     )
 

@@ -152,28 +152,52 @@ async function searchAndSelectTestFile(): Promise<string> {
         const quickPickItems = testFiles.map(uri => ({
             label: path.basename(uri.fsPath),
             description: vscode.workspace.asRelativePath(uri),
-            detail: uri.fsPath,
             uri: uri
         }));
 
-        const selectedItem = await vscode.window.showQuickPick(quickPickItems, {
-            placeHolder: 'Select a test file from your workspace',
-            matchOnDescription: true,
-            matchOnDetail: true
-        });
+        while (true) {
+            const selectedItem = await vscode.window.showQuickPick(quickPickItems, {
+                placeHolder: 'Select a test file from your workspace',
+                matchOnDescription: true,
+                matchOnDetail: true
+            });
 
-        if (selectedItem) {
+            if (!selectedItem) {
+                return '';
+            }
+
             try {
-                const content = fs.readFileSync(selectedItem.uri.fsPath, 'utf8');
-                
-                if (isValidTestCase(content)) {
-                    vscode.window.showInformationMessage(`Test case loaded: ${selectedItem.label}`);
-                    return content;
+                // Open and display the file
+                const document = await vscode.workspace.openTextDocument(selectedItem.uri);
+                await vscode.window.showTextDocument(document, { preview: true });
+
+                // Confirm selection
+                const selection = await vscode.window.showQuickPick(['Yes', 'No'], {
+                    placeHolder: `Do you want to use ${selectedItem.label}?`,
+                    ignoreFocusOut: true
+                });
+
+                // Close the preview editor
+                await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+
+                if (selection === 'Yes') {
+                    const content = document.getText();
+                    
+                    if (isValidTestCase(content)) {
+                        vscode.window.showInformationMessage(`Test case loaded: ${selectedItem.label}`);
+                        return content;
+                    } else {
+                        vscode.window.showWarningMessage(`File ${selectedItem.label} does not appear to be a valid test case.`);
+                        return '';
+                    }
+                } else if (selection === 'No') {
+                    continue;
                 } else {
-                    vscode.window.showWarningMessage(`File ${selectedItem.label} does not appear to be a valid test case.`);
+                    return '';
                 }
             } catch (error) {
                 vscode.window.showErrorMessage(`Error reading ${selectedItem.label}: ${error}`);
+                return '';
             }
         }
     } catch (error) {

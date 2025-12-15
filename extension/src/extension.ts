@@ -5,7 +5,7 @@ import { CodeHistoryDiffPlayer, virtualFileSystemRegister } from './diffView';
 import { GenTestCodeLensProvider } from './inlineCodeLens';
 import { customClientRequestHandler } from './messageHandler';
 import { setWebRoot, TesterWebViewProvider } from './sidebarView';
-import { detectCodeLang, extractGenTestCode, extractRefTestCode, langSuffix, shouldGenTestPrompt } from './textUtils';
+import { detectCodeLang, extractGenTestCode, extractRefTestCode, langSuffix } from './textUtils';
 import { showANewEditorForInput } from './utils';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -176,8 +176,8 @@ async function updateMessage(msg: any, i: number, allMsg: any, ui: TesterWebView
     content = content.replace(/```.*?```/gs, (s: string) => {
         return s.replace(/^[0-9]+:/gm, '');
     });
-    content = content.replace(/```(.*?)```/gs, (match: string, p1: string) => {
-        return `\`\`\`java${p1}\`\`\``;
+    content = content.replace(/```\n?(.*?)```/gs, (match: string, p1: string) => {     // some message may start with ```package
+        return `\`\`\`java\n${p1}\`\`\``;
     });
     await ui.showMessage({
         role: msg.role,
@@ -187,17 +187,11 @@ async function updateMessage(msg: any, i: number, allMsg: any, ui: TesterWebView
 
     // show test code diff if matches
     let test;
-    if (phase === 'init'
-        && msg.role === 'user' && (test = extractRefTestCode(content))) {
+    if (test = extractRefTestCode(content)) {
         addTestCode(test);
         return 'after-ref';
     }
-    else if (
-        i > 0
-        && allMsg[i - 1].role === 'user'
-        && shouldGenTestPrompt(allMsg[i - 1].content)
-        && (test = extractGenTestCode(content))
-    ) {
+    else if (msg.role === 'assistant' && (test = extractGenTestCode(content))) {
         addTestCode(test);
     }
     return phase;
