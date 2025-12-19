@@ -13,6 +13,9 @@ from typing import Dict, List, Optional, Union
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from core import run_test_generation_chat
+import os
+from tools.extension_api.collect_pairs.main import dump_collect_pairs
+from tools.extension_api.generate_test_descs.main import generate_test_descriptions
 
 app = Flask(__name__)
 
@@ -546,6 +549,55 @@ def client_response_route():
         raise APIError("Failed to process response", 500)
 
     return jsonify(success=True, message="Response received")
+
+
+@app.route('/generate_data', methods=['POST'])
+def generate_data():
+    data = request.json
+    project_path = data.get('project_path')
+    use_jacoco = data.get('use_jacoco', False)
+    test_suffix = data.get('test_suffix', 'Test')
+    if not project_path:
+        return jsonify({'error': 'project_path is required'}), 400
+    
+    project_name = os.path.basename(project_path)
+    workspace_dir = project_path 
+    
+    # Paths
+    intention_test_dir = os.path.join(workspace_dir, '.intention-test')
+    collected_coverages_dir = os.path.join(intention_test_dir, 'collected_coverages')
+    test_desc_dataset_dir = os.path.join(intention_test_dir, 'test_desc_dataset')
+    
+    # 1. Collect Pairs
+    try:
+        logger.info(f"Starting collect_pairs for {project_name} (use_jacoco={use_jacoco}, test_suffix={test_suffix})")
+        dump_collect_pairs(
+            project_path=project_path,
+            test_suffix=test_suffix, 
+            output_path=collected_coverages_dir,
+            do_dynamic_analysis=use_jacoco
+        )
+    except Exception as e:
+        logger.error(f"Error in collect_pairs: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+        
+    # 2. Generate Test Descriptions
+    coverage_file = os.path.join(collected_coverages_dir, f'{project_name}.json')
+    try:
+        logger.info(f"Starting generate_test_descriptions for {project_name}")
+        generate_test_descriptions(
+            project_name=project_name,
+            coverage_path=coverage_file,
+            llm_name='gpt-4o', 
+            output_path=test_desc_dataset_dir
+        )
+    except Exception as e:
+        logger.error(f"Error in generate_test_descriptions: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+        
+    return jsonify({'status': 'success'})
 
 
 # Removed the old start_http_server function
