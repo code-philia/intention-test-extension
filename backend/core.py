@@ -215,15 +215,9 @@ def run_test_generation_chat(
             "No matching fact data found for focal method:\n%s", focal_method_name
         )
 
-    ref_score, ref_focal_method, ref_test_case = retrieve_reference_offline_by_name(
-        offline_fact_ref_data, focal_method_name
+    ref_scores, ref_focal_methods, ref_test_cases = retrieve_reference_offline_by_name(
+        offline_fact_ref_data, focal_method_name, top_k=3
     )
-    references_tc_rag = [ref_test_case]
-
-    if len(references_tc_rag) > 0:
-        top_1_reference_tc_rag = references_tc_rag[0]
-    else:
-        top_1_reference_tc_rag = None
 
     if isinstance(top_1_reference_tc_rag, list):
         top_1_reference_tc_rag = "\n".join(top_1_reference_tc_rag)
@@ -241,7 +235,7 @@ def run_test_generation_chat(
             target_context=target_focal_file,
             target_test_case_desc=target_test_case_desc,
             target_test_case_path=target_test_case_path,
-            referable_test_case=top_1_reference_tc_rag,
+            referable_test_cases=ref_test_cases,
             facts=facts,
             junit_version=str(query_session.junit_version)
             if query_session is not None
@@ -252,7 +246,7 @@ def run_test_generation_chat(
     return messages, generated_test_case
 
 
-def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_k=1):
+def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_k=5):
     """
     Search for reference data by focal method name instead of index.
     """
@@ -260,11 +254,15 @@ def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_
     fact_data = find_fact_data_by_method_name(offline_ref_data, focal_method_name)
 
     if fact_data is not None:
-        if len(fact_data["rag_references"]) == 0:
+        rag_refs = fact_data["rag_references"]
+        if len(rag_refs) == 0:
             return [], [], []
         else:
-            ref_score, ref_focal_method, ref_test_case = fact_data["rag_references"][0]
-            return ref_score, ref_focal_method, ref_test_case
+            top_refs = rag_refs[:top_k]
+            ref_scores = [r[0] for r in top_refs]
+            ref_focal_methods = [r[1] for r in top_refs]
+            ref_test_cases = [r[2] for r in top_refs]
+            return ref_scores, ref_focal_methods, ref_test_cases
 
     # No match found
     logger.warning("No reference data found for focal method: %s", focal_method_name)
@@ -272,18 +270,21 @@ def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_
 
 
 def retrieve_reference_offline(
-    coverage_idx, offline_ref_data, focal_method_name, top_k=1
+    coverage_idx, offline_ref_data, focal_method_name, top_k=3
 ):
     info = offline_ref_data[coverage_idx]
     assert info["target_coverage_idx"] == coverage_idx
     # assert focal_method_name == info['focal_method_name']
-    assert top_k == 1  # for now, only consider the top 1
 
     if len(info["rag_references"]) == 0:
         return [], [], []
     else:
-        ref_score, ref_focal_method, ref_test_case = info["rag_references"][0]
-        return ref_score, ref_focal_method, ref_test_case
+        rag_refs = info["rag_references"]
+        top_refs = rag_refs[:top_k]
+        ref_scores = [r[0] for r in top_refs]
+        ref_focal_methods = [r[1] for r in top_refs]
+        ref_test_cases = [r[2] for r in top_refs]
+        return ref_scores, ref_focal_methods, ref_test_cases
 
 
 def get_crucial_facts_offline_by_name(

@@ -1,5 +1,6 @@
 import re
-import os
+import logging
+logger = logging.getLogger(__name__)
 
 from agents import TestGenAgent, TestRefineAgent
 from type import AbstractMessageSyncHandler
@@ -143,89 +144,100 @@ class IntentionTester:
         # Check if at least one test indicator is present
         return any(indicator in content for indicator in test_indicators)
 
-    def _load_test_case_from_file(self, file_path):
+    def extract_method_name(self, test_case_code):
         """
-        Attempt to load and validate a test case from a file path.
+        Extracts a descriptive name for the test case, preferably ClassName::methodName(args).
         """
-        if self.extension_query_session is None:
-            return None
+        class_name = None
+        method_signature = None
         
-        answer = self.extension_query_session.request_client_response(
-            "The provided input doesn't appear to be a test case. Is it a file path to a test case file?",
-            response_type="confirm",
-        )
+        # Try to find class name
+        class_match = re.search(r'class\s+(\w+)', test_case_code)
+        if class_match:
+            class_name = class_match.group(1)
+            
+        # Helper to clean and format signature
+        def format_sig(name, args):
+            args = args.strip()
+            # Collapse whitespace and newlines into single space
+            args = re.sub(r'\s+', ' ', args)
+            return f"{name}({args})"
 
-        if not answer or answer.lower() not in ["yes", "y", "true", "1"]:
-            self.append_message(
-                {
-                    "role": "assistant",
-                    "content": "⚠️ Invalid test case format. Proceeding without reference.",
-                }
-            )
-            return None
+        # Try to find method name
+        # Priority 1: @Test or @ParameterizedTest annotated methods
+        # We look for @Test/@ParameterizedTest followed by optional whitespace/newlines/modifiers, then void, then method name
+        # Using [\s\S]*? to skip annotations, modifiers (public, private, etc.)
+        test_method_match = re.search(r'@(?:Test|ParameterizedTest)[\s\S]*?\bvoid\s+(\w+)\s*\(([^)]*)\)', test_case_code)
+        
+        if test_method_match:
+            method_name = test_method_match.group(1)
+            method_args = test_method_match.group(2)
+            method_signature = format_sig(method_name, method_args)
+        else:
+            # Fallback to any void method that starts with 'test'
+            test_prefix_match = re.search(r'\bvoid\s+(test\w+)\s*\(([^)]*)\)', test_case_code, re.IGNORECASE)
+            if test_prefix_match:
+                method_name = test_prefix_match.group(1)
+                method_args = test_prefix_match.group(2)
+                method_signature = format_sig(method_name, method_args)
+            else:
+                # Fallback to any void method
+                method_match = re.search(r'\bvoid\s+(\w+)\s*\(([^)]*)\)', test_case_code)
+                if method_match:
+                    method_name = method_match.group(1)
+                    method_args = method_match.group(2)
+                    method_signature = format_sig(method_name, method_args)
 
-        try:
-            if not os.path.exists(file_path.strip()):
-                self.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": "⚠️ File not found. Proceeding without reference test case.",
-                    }
-                )
-                self.extension_query_session.update_messages(self.messages)
-                return None
-
-            with open(file_path.strip(), "r", encoding="utf-8") as f:
-                file_content = f.read()
-
-            if not self.is_valid_test_case(file_content):
-                self.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": "⚠️ The file doesn't appear to contain a valid test case. Proceeding without reference.",
-                    }
-                )
-                self.extension_query_session.update_messages(self.messages)
-                return None
-
-            self.messages.append(
-                {
-                    "role": "assistant",
-                    "content": f"✅ Test case loaded from file: {file_path.strip()}",
-                }
-            )
-            self.extension_query_session.update_messages(self.messages)
-            return file_content
-
-        except Exception as e:
-            self.messages.append(
-                {
-                    "role": "assistant",
-                    "content": f"⚠️ Error reading file: {str(e)}. Proceeding without reference.",
-                }
-            )
-            self.extension_query_session.update_messages(self.messages)
-            return None
+        if class_name and method_signature:
+            return f"{class_name}::{method_signature}"
+        elif method_signature:
+            return method_signature
+        else:
+            logger.warning("Unable to extract method or class name from test case code.")
+            return "Unknown Test Case"
 
     def generate_test_case_with_refine(
         self,
-        target_focal_method: str,
-        target_context: str,
-        target_test_case_desc: str,
-        target_test_case_path: str,
-        referable_test_case: str | None,
-        facts: list[str],
-        junit_version: str,
+        target_focal_method,
+        target_context,
+        target_test_case_desc,
+        target_test_case_path,
+        referable_test_cases,
+        facts,
+        junit_version,
         prohibit_fact: bool = False,
     ):
         self.generation_with_refine_log = []
-        self.messages = []  # Reset messages for new generation
+        
+        referable_test_case = None
 
-        # Request referable test case from client if query session is available
-        if self.extension_query_session and not referable_test_case:
-            referable_test_case = self.request_referable_test_case_from_client(
-                target_focal_method
-            )
+        if self.query_session:
+            if referable_test_cases and len(referable_test_cases) > 0:
+                # generate options and ask
+                options = []
+                for i, tc in enumerate(referable_test_cases):
+                    name = self.extract_method_name(tc)
+                    options.append(f"{i+1}. {name}")
+                options.append("Provide my own reference")
+                
+                selection = self.query_session.request_client_response(
+                    "Select a reference test case:",
+                    response_type="choice",
+                    options=options
+                )
+                
+                if selection == "Provide my own reference":
+                    referable_test_case = self.request_referable_test_case_from_client(target_focal_method)
+                elif selection in options:
+                    index = options.index(selection)
+                    referable_test_case = referable_test_cases[index]
+            else:
+                # no references found, ask user directly
+                referable_test_case = self.request_referable_test_case_from_client(target_focal_method)
+        else:
+            logger.warning("No query session available when selecting referable test case!")
+            if referable_test_cases and len(referable_test_cases) > 0:
+                referable_test_case = referable_test_cases[0]
 
         target_test_class_name = target_test_case_path.split("/")[-1].replace(
             ".java", ""
