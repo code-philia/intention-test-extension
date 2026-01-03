@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-ci:
+    name: Node Lint & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js (with npm cache)
+        if: ${{ hashFiles('package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Set up Node.js (no cache)
+        if: ${{ hashFiles('package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint (if available)
+        run: npm run lint --if-present
+        continue-on-error: true
+
+      - name: Compile (if available)
+        run: npm run compile --if-present
+
+      - name: Run tests
+        run: xvfb-run -a npm test
+        continue-on-error: true
+
+      - name: Upload build output (if present)
+        if: ${{ hashFiles('out/**') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-${{ github.sha }}
+          path: out

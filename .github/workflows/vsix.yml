@@ -1,0 +1,68 @@
+﻿name: VSIX Package & Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  vsix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: vsix-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile extension
+        run: npm run compile --if-present
+
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce package
+
+      - name: Read package metadata
+        id: pmeta
+        run: |
+          NAME=$(node -e "console.log(require('./package.json').name||'extension')")
+          VER=$(node -e "console.log(require('./package.json').version||'0.0.0')")
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ steps.pmeta.outputs.name }}-${{ steps.pmeta.outputs.version }}
+          path: '*.vsix'
+
+      - name: Detect publisher field
+        id: meta
+        run: |
+          PUB=$(node -e "try{console.log(require('./package.json').publisher||'')}catch(e){console.log('')}")
+          echo "publisher=$PUB" >> $GITHUB_OUTPUT
+          if [ -z "$PUB" ]; then echo 'No publisher found in package.json; publish step will be skipped.'; fi
+
+      - name: Publish (stable)
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: ${{ env.VSCE_PAT != '' && steps.meta.outputs.publisher != '' && !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'pre') }}
+        run: npx --yes @vscode/vsce publish
+
+      - name: Publish (pre-release)
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: ${{ env.VSCE_PAT != '' && steps.meta.outputs.publisher != '' && (contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'pre')) }}
+        run: npx --yes @vscode/vsce publish --pre-release
