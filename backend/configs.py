@@ -1,8 +1,9 @@
 from user_config import global_config
 import os
+import re
 
 class Configs:
-    def __init__(self, project_name, tester_path = '') -> None:
+    def __init__(self, project_name, tester_path = '', llm_name_override: str | None = None) -> None:
         self.root_dir = os.path.abspath(os.path.dirname(__file__))
         self.openai_api_key = global_config['openai']['apikey']
         self.openai_url = global_config['openai']['url']
@@ -10,7 +11,14 @@ class Configs:
         os.environ['OPENAI_BASE_URL'] = self.openai_url
 
         self.project_name = project_name
-        self.llm_name = 'gpt-4o'
+        # allow overriding model via config.ini -> [openai] model/models = ...
+        raw_models = global_config['openai'].get('models', '').strip()
+        if not raw_models:
+            raw_models = global_config['openai'].get('model', 'gpt-4o')
+        self.llm_names = [name.strip() for name in re.split(r'[,\n]+', raw_models) if name.strip()]
+        if not self.llm_names:
+            self.llm_names = ['gpt-4o']
+        self.llm_name = llm_name_override or self.llm_names[0]
 
         self.max_context_len = 1024
         self.max_input_len = 4096
@@ -22,7 +30,8 @@ class Configs:
         else:
             self.workspace = f'{self.root_dir}/intention_test_extension'
 
-        self.corpus_path =  f'{self.workspace}/data/collected_coverages/{project_name}.json'
+        # Align with dump_collect_pairs: it writes to backend/data/{project}.json
+        self.corpus_path =  f'{self.root_dir}/data/{project_name}.json'
         self.project_without_test_file_path = f'{self.workspace}/data/repos_removing_test/{project_name}'
         self.project_with_test_file_path = f'{self.workspace}/data/repos_with_test/{project_name}'
         

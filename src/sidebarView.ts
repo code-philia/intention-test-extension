@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as marked from 'marked';
 import { detectCodeLang, extractGenTestCode, extractRefTestCode, isGenTestPrompt, langSuffix, shouldGenTestPrompt } from './textUtils';
 import { CodeHistoryDiffPlayer } from './diffView';
 
@@ -15,6 +14,7 @@ export function setWebRoot(root: string) {
 export class TesterWebViewProvider implements vscode.WebviewViewProvider {
     private _context: vscode.ExtensionContext;
     private _view?: vscode.Webview;
+    private _messageHandler?: (msg: any) => Thenable<void> | void;
 
     constructor(context: vscode.ExtensionContext) {
         this._context = context;
@@ -34,9 +34,15 @@ export class TesterWebViewProvider implements vscode.WebviewViewProvider {
             if (msg.cmd === 'open-code' && msg.content && msg.lang) {
                 const doc = await vscode.workspace.openTextDocument({ language: msg.lang, content: msg.content });
                 vscode.window.showTextDocument(doc);
+            } else if (this._messageHandler) {
+                await this._messageHandler(msg);
             }
         });
 
+    }
+
+    public setMessageHandler(handler: (msg: any) => Thenable<void> | void): void {
+        this._messageHandler = handler;
     }
 
     private getHtmlContent(): string {

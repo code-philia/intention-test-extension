@@ -6,169 +6,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat Bot</title>
     <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/styles/default.min.css">
-    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@latest/build/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/highlight.min.js"></script>
 </head>
 
 <body>
+    <header id="toolbar">
+        <div class="title">
+            <span class="name">Intention Test</span>
+            <span class="tagline">LLM-based iterative test assistant</span>
+        </div>
+        <div class="status-pill" aria-live="polite">
+            <span class="status-dot"></span>
+            <span class="status-text">Idle</span>
+        </div>
+        <div class="toolbar-actions">
+            <button type="button" data-action="jump-latest">跳到最新</button>
+            <button type="button" data-action="toggle-scroll-lock" data-locked="false">阅读锁定</button>
+            <button type="button" data-action="stop-run">停止</button>
+            <button type="button" data-action="clear-chat">清空</button>
+        </div>
+    </header>
     <div id="no-message">
         <h1>Intention Test 🧪</h1>
         <div>An LLM-based iterative test generator. <br/> Waiting for request...</div>
     </div>
     <div id="chat-container"></div>
-    <script>
-        const noMessagePrompt = document.getElementById('no-message');
-        const chatContainer = document.getElementById('chat-container');
-        const userInput = document.getElementById('user-input');
-        const body = document.getElementsByTagName('body')[0];
-
-        body.addEventListener('keydown', function (event) {
-            if (event.key === 'Enter') {
-                sendMessage();
-            }
-        });
-
-        function timeout(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
-        function onClickForMessage(msg) {
-            return () => {
-                if (msg.classList.contains('expand')) {
-                    msg.classList.remove('expand');
-                    msg.style.maxHeight = "5px";
-                } else {
-                    msg.classList.add('expand');
-                    msg.style.maxHeight = msg.scrollHeight + 'px';
-                }
-            }
-        }
-
-        function createMessageContent(message, isHtml) {
-            const messageContentElement = document.createElement('div');
-            messageContentElement.className = 'message-content'
-            if (isHtml) {
-                messageContentElement.innerHTML = message;
-            }
-            else {
-                messageContentElement.textContent = message;
-            }
-            return messageContentElement;
-        }
-
-        function addMessage(message, sender, isHtml, senderType) {
-            const messageContentElement = createMessageContent(message, isHtml);
-
-            const messageElement = document.createElement('div');
-            messageElement.appendChild(messageContentElement);
-            messageElement.className = 'message before-show ' + sender;
-
-            const messageHeader = document.createElement('div');
-            messageHeader.className = 'message-header';
-            if (!senderType) {
-                senderType = sender;
-            }
-            messageHeader.textContent = senderType[0].toUpperCase() + senderType.substring(1);
-
-            chatContainer.appendChild(messageHeader);
-            chatContainer.appendChild(messageElement);
-        
-            doScroll();
-            return messageElement;
-        }
-        
-        window.lastMouseTime = Date.now(); 
-        body.addEventListener('mousewheel', function (e) {
-            window.lastMouseTime = Date.now(); 
-        });
-        body.addEventListener('mousedown', function (e) {
-            window.lastMouseTime = Date.now(); 
-        });
-        function doScroll() {
-            if (!(window.lastMouseTime && Date.now() - window.lastMouseTime < 3000)) {
-                body.scrollTo({
-                    top: body.scrollHeight,
-                    behavior: 'smooth'
-                });
-            }
-        }
-
-        function showTypingAnimation(sender) {
-            addMessage('<div style="padding: 10px;"><span></span><span></span><span></span></div>', 'typing ' + sender, true, sender);
-        }
-
-        function completeTypingAnimation(html, sender) {
-            const typingElement = document.querySelector('.typing');
-            if (typingElement) {
-                typingElement.className = 'message ' + sender;
-                typingElement.innerHTML = '';
-                typingElement.appendChild(createMessageContent(html, true));
-                doScroll();
-                return typingElement;
-            }
-            return undefined;
-        }
-
-        function removeTypingAnimation() {
-            const typingElement = document.querySelector('.typing');
-            if (typingElement) {
-                chatContainer.removeChild(typingElement);
-            }
-        }
-
-        const canConnectToVsCode = (window.acquireVsCodeApi !== undefined);
-        if (canConnectToVsCode) {
-            window.vscode = acquireVsCodeApi();
-        }
-
-        window.addEventListener('message', async (event) => {
-            console.log(event.data);
-            msg = event.data;
-            if (msg.role && msg.content) {
-                noMessagePrompt.style.display = 'none';
-
-                if (msg.role.endsWith('-wait')) {
-                    msg.role = msg.role.substring(0, msg.role.length - '-wait'.length);
-                    showTypingAnimation(msg.role);
-                } else {
-                    let messageElement = completeTypingAnimation(msg.content, msg.role)
-                        ?? addMessage(msg.content, msg.role, true);
-                    messageElement.querySelectorAll('pre code').forEach((block) => {
-                        hljs.highlightElement(block);
-                    });
-                    messageElement.querySelectorAll('code').forEach((block) => {
-                        const buttonSvg = '<svg xmlns="http://www.w3.org/2000/svg" height="16px" viewBox="0 -960 960 960" width="16px" fill="#5f6368"><path d="M189.06-113.3q-31 0-53.38-22.38-22.38-22.38-22.38-53.38v-581.88q0-31.06 22.38-53.49 22.38-22.43 53.38-22.43H466v75.92H189.06v581.88h581.88V-466h75.92v276.94q0 31-22.43 53.38Q802-113.3 770.94-113.3H189.06Zm201.08-223.37-52.81-53.47 380.81-380.8H532.67v-75.92h314.19v314.19h-75.92v-184.8l-380.8 380.8Z"></path></svg>'
-                        const button = document.createElement('button');
-                        button.className = 'open-code-button';
-                        button.attributes.title = 'Open';
-                        button.onclick = () => {
-                            let lang;
-                            for (const cls of block.classList) {
-                                if (cls.startsWith('language-')) {
-                                    lang = cls.substring('language-'.length);
-                                    break;
-                                }
-                            }
-                            window.vscode?.postMessage({ cmd: 'open-code', content: block.textContent, lang: lang });
-                        }
-                        button.innerHTML = buttonSvg;
-                        block.appendChild(button);
-
-                        block.onmousemove = () => { button.classList.add('show'); }
-                        block.onmouseleave = () => {
-                            button.classList.remove('show');
-                        };
-                    });
-                }
-            } else if (msg.cmd) {
-                if (msg.cmd === 'error') {
-                    // TODO add error processing
-                } else if (msg.cmd === 'clear') {
-                    // TODO clear the chat and show no-message prompt again
-                }
-            }
-        });
-    </script>
 </body>
 
 <script src="index.js"></script>
