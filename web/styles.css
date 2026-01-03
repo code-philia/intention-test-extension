@@ -1,25 +1,66 @@
+:root {
+    --surface-background: var(--vscode-sideBar-background, #f5f5f5);
+    --surface-card: var(--vscode-editorWidget-background, #ffffff);
+    --surface-muted: var(--vscode-editor-inactiveSelectionBackground, rgba(0, 0, 0, 0.05));
+    --border-color: var(--vscode-editorWidget-border, rgba(0, 0, 0, 0.12));
+    --assistant-accent: var(--vscode-testing-iconPassed, #2ea043);
+    --user-accent: var(--vscode-testing-iconQueued, #007acc);
+    --code-block-bg: var(--vscode-editor-background, #f3f4f6);
+    --code-block-foreground: var(--vscode-editor-foreground, #111827);
+    --code-block-border: var(--border-color);
+    --link-color: var(--vscode-textLink-foreground, #3794ff);
+    --toolbar-bg: var(--vscode-sideBarSectionHeader-background, rgba(255, 255, 255, 0.2));
+    --hint-text: var(--vscode-descriptionForeground, rgba(0, 0, 0, 0.6));
+    --danger: var(--vscode-charts-red, #f85149);
+    --warn: var(--vscode-charts-orange, #ffab70);
+    --ok: var(--vscode-testing-iconPassed, #2ea043);
+    --idle: var(--vscode-foreground, #4b5563);
+}
+
 html {
     overflow-y: auto;
 }
 
 body {
-    /* font-family: Arial, sans-serif; */
     margin: 0;
-    padding: 0;
+    padding: 16px 16px 32px;
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    min-height: 100vh;
     overflow-y: auto;
+    background: var(--surface-background);
+    color: var(--vscode-sideBar-foreground, #1e1e1e);
+    font-family: var(--vscode-font-family, "Segoe UI", "Helvetica Neue", Arial, sans-serif);
+    gap: 16px;
+    box-sizing: border-box;
+}
+
+#toolbar,
+#no-message,
+#chat-container {
+    width: min(960px, 100%);
+    align-self: center;
 }
 
 #chat-container {
     flex: 1;
     display: flex;
     flex-direction: column;
-    /* border: 1px solid #ccc; */
-    padding: 10px;
-    /* overflow-y: auto; */
-    /* transition: all 0.3s ease; */
+    gap: 12px;
+    padding: 4px 2px;
+    box-sizing: border-box;
+}
+
+#no-message {
+    background-color: var(--surface-card);
+    border: 1px dashed var(--border-color);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+}
+
+#no-message h1 {
+    margin-bottom: 0.3em;
 }
 
 #input-container {
@@ -28,59 +69,39 @@ body {
     padding: 10px;
 }
 
-#input-container input {
-    flex: 1;
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    width: 50px;
-}
-
-#input-container button {
-    padding: 10px;
-    margin-left: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    background-color: #007acc;
-    color: white;
-    cursor: pointer;
-}
-
 .message {
-    /* height: 30px; */
-    margin: 5px 0 20px 0;
-    border-radius: 4px;
-    transition: all 0.5s ease-in-out;
-    overflow: hidden;
+    margin: 0 0 16px 0;
+    border-radius: 10px;
+    transition: background-color 0.2s ease-in-out;
+    width: 100%;
     max-width: 100%;
-}
-.message-content {
-    /* white-space: pre-wrap;  /* this is to render linebreak in pure text, not needed anymore when using a piece of html parsed from markdown */ 
-    padding: 0 10px;
-    transition: all 0.5s ease-in-out;
-    /* overflow-x: auto;    /* this will hiden the overflowing button */
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-color);
+    padding: 12px 14px;
+    box-sizing: border-box;
+    word-break: break-word;
 }
 
+.message-content {
+    padding: 0;
+    transition: all 0.25s ease-in-out;
+    color: inherit;
+}
 
 .message.assistant {
-    background-color: #f1f1f1;
+    border-left: 3px solid var(--assistant-accent);
     margin-right: auto;
-    /* align-self: flex-start; */
 }
 
 .message.user,
 .message.system {
-    /* background-color: #007acc;
-    color: white; */
-    background-color: #f1f1f1;
-    /* margin-left: auto; */
+    border-left: 3px solid var(--user-accent);
     margin-right: auto;
-    /* align-self: flex-end; */
 }
 
 .message.bot {
-    background-color: #f1f1f1;
-    align-self: flex-start;     /* this will break overflow, see <https://stackoverflow.com/questions/43193923/align-items-flex-end-breaks-overflow-auto> */
+    background-color: var(--surface-card);
+    align-self: flex-start;
 }
 
 .message.bot.title {
@@ -99,50 +120,108 @@ body {
 }
 
 .message h1 {
-    font-size: 1.2em;
-    margin-block-start: 0.5em;
-    margin-block-end: 0.5em;
-    margin-inline-start: 0em;
-    margin-inline-end: 0em;
-}
-
-.message p code,
-.message li code {
-    line-height: 2em;
-}
-
-.message pre {
-    position: relative;     /* for the button to float */
-}
-
-.message code {
-    background-color: var(--vscode-editor-background);
-    font-family: var(--vscode-editor-font-family);
+    font-size: 1.25em;
+    margin: 0.5em 0;
 }
 
 .message p {
     white-space: pre-wrap;
+    line-height: 1.6;
+    margin: 0.35em 0;
+}
+
+.message ul,
+.message ol {
+    padding-left: 1.2rem;
 }
 
 .message li {
-    margin-block-start: 0.3em;
-    margin-block-end: 0.3em;
+    margin: 0.2em 0;
+}
+
+.message code {
+    background-color: var(--surface-muted);
+    font-family: var(--vscode-editor-font-family);
+    border-radius: 6px;
+    padding: 0.1em 0.4em;
+    color: inherit;
+}
+
+.message p code,
+.message li code {
+    line-height: 1.8em;
+}
+
+.message pre {
+    position: relative;
+    background-color: var(--code-block-bg);
+    color: var(--code-block-foreground);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 0.6em 0;
+    overflow-x: auto;
+    border: 1px solid var(--code-block-border);
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+}
+
+.message pre .code-copy-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: var(--surface-card);
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.8;
+}
+
+.message pre .code-copy-button:hover {
+    opacity: 1;
+    background: var(--surface-muted);
+}
+
+.message pre code {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.message pre.code-wrap-off code {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+}
+
+.message pre.code-wrap-off {
+    overflow-x: auto;
+}
+.message a {
+    color: var(--link-color);
 }
 
 .message-header {
-    font-size: large;
-    font-weight: bold;
-    /* display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px;
-    background-color: #f1f1f1;
-    border-bottom: 1px solid #ccc; */
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground, rgba(0, 0, 0, 0.55));
+    margin: 0 0 6px;
 }
 
 .typing {
     display: flex;
     align-items: center;
+    gap: 6px;
+    background-color: var(--surface-muted);
+    padding: 10px 12px;
+    border-radius: 8px;
 }
 
 .typing span {
@@ -163,26 +242,53 @@ body {
     animation-delay: 0.4s;
 }
 
-.open-code-button {
-    position: absolute;
-    right: 10px;
-    top: -10px;
-    /* transform: translateY(-50%); */
-    width: 24px;
-    height: 24px;
-    padding: 2px;
-    opacity: 0.3;
-    visibility: hidden;
+.hljs {
+    background: transparent;
+    color: var(--code-block-foreground);
 }
 
-.open-code-button.show {
-    visibility: visible;
+.hljs-comment,
+.hljs-quote {
+    color: var(--vscode-foreground, #6a9955);
+    font-style: italic;
 }
 
-.open-code-button.show:hover {
-    opacity: 1.0;
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal {
+    color: var(--vscode-charts-blue, #569cd6);
 }
 
+.hljs-string,
+.hljs-title,
+.hljs-name {
+    color: var(--vscode-charts-orange, #ce9178);
+}
+
+.hljs-number,
+.hljs-attr,
+.hljs-symbol {
+    color: var(--vscode-charts-purple, #b267e6);
+}
+
+.hljs-section,
+.hljs-type,
+.hljs-selector-id {
+    color: var(--vscode-charts-green, #4ec9b0);
+}
+
+.hljs-attr,
+.hljs-built_in {
+    color: var(--vscode-charts-blue, #569cd6);
+}
+
+.hljs-emphasis {
+    font-style: italic;
+}
+
+.hljs-strong {
+    font-weight: 700;
+}
 
 @keyframes blink {
 
@@ -198,5 +304,124 @@ body {
 }
 
 #no-message {
-    padding: 0 2em;    
+    padding: 0 2em;
+}
+#toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    background-color: var(--toolbar-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    gap: 12px;
+}
+
+#toolbar .title {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#toolbar .name {
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+
+#toolbar .tagline {
+    font-size: 0.85rem;
+    color: var(--hint-text);
+}
+
+.toolbar-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.toolbar-actions button {
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 6px 12px;
+    background-color: var(--surface-card);
+    color: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.toolbar-actions button:hover {
+    background-color: var(--surface-muted);
+}
+
+.toolbar-actions button:disabled {
+    opacity: 0.6;
+    cursor: default;
+    transform: none;
+    box-shadow: none;
+}
+
+.toolbar-actions button[data-action="stop-run"] {
+    background-image: linear-gradient(135deg, rgba(255, 138, 0, 0.18), transparent);
+    border-color: rgba(255, 138, 0, 0.35);
+}
+
+.toolbar-actions button[data-action="clear-chat"] {
+    background-image: linear-gradient(135deg, rgba(255, 99, 72, 0.15), transparent);
+    border-color: rgba(255, 99, 72, 0.3);
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-muted) 65%, transparent);
+    border: 1px solid var(--border-color);
+    font-weight: 600;
+    color: var(--idle);
+}
+
+.status-pill .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--idle);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--idle) 20%, transparent);
+}
+
+.status-pill[data-state="running"] {
+    color: var(--ok);
+}
+
+.status-pill[data-state="running"] .status-dot {
+    background: var(--ok);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent);
+}
+
+.status-pill[data-state="stopping"],
+.status-pill[data-state="stopped"] {
+    color: var(--warn);
+}
+
+.status-pill[data-state="stopping"] .status-dot,
+.status-pill[data-state="stopped"] .status-dot {
+    background: var(--warn);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 30%, transparent);
+}
+
+.status-pill[data-state="error"] {
+    color: var(--danger);
+}
+
+.status-pill[data-state="error"] .status-dot {
+    background: var(--danger);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 30%, transparent);
 }

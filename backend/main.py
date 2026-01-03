@@ -5,7 +5,8 @@ import shutil
 from generator import IntentionTester
 from dataset import Dataset
 from configs import Configs
-from server import ModelQuerySession
+from modules.session import ModelQuerySession
+from typing import Optional
 import pathlib
 from extension_api.collect_pairs.main import dump_collect_pairs
 
@@ -36,22 +37,47 @@ class IntentionTest:
         corpus_fm, corpus_fm_name, corpus_context, corpus_tc_name, corpus_test_case_path = [], [], [], [], []
 
         for each_data in all_data:
-            corpus_fm.append(''.join(each_data['target_coverage']).replace('<COVER>', ''))
-            corpus_fm_name.append(each_data['focal_method_name'])
-            corpus_context.append(each_data['target_context'])
-            corpus_tc_name.append(each_data['target_test_case_name'].split('::::')[-1].split('(')[0])
-            corpus_test_case_path.append(each_data['focal_file_path'].replace('src/main/java', 'src/test/java').replace('.java', 'Test.java'))
+            if 'target_coverage' in each_data:
+                # original expected format
+                corpus_fm.append(''.join(each_data['target_coverage']).replace('<COVER>', ''))
+                corpus_fm_name.append(each_data.get('focal_method_name', ''))
+                corpus_context.append(each_data.get('target_context', ''))
+                tc_name = each_data.get('target_test_case_name', '')
+                corpus_tc_name.append(tc_name.split('::::')[-1].split('(')[0] if tc_name else '')
+                focal_file_path = each_data.get('focal_file_path', '')
+                if focal_file_path:
+                    corpus_test_case_path.append(focal_file_path.replace('src/main/java', 'src/test/java').replace('.java', 'Test.java'))
+                else:
+                    corpus_test_case_path.append('')
+            else:
+                # fallback to collect_pairs schema
+                # focal method text
+                fm = each_data.get('focal_method', [])
+                corpus_fm.append(''.join(fm) if isinstance(fm, list) else str(fm))
+                # focal method name
+                corpus_fm_name.append(each_data.get('focal_method_name', ''))
+                # use focal method content as context (best available without re-reading files)
+                corpus_context.append(''.join(fm) if isinstance(fm, list) else str(fm))
+                # derive test case simple name from test_name or test_path
+                test_name = each_data.get('test_name', '')
+                if test_name:
+                    corpus_tc_name.append(test_name.split('(')[0].split('::::')[-1])
+                else:
+                    test_path = each_data.get('test_path', '')
+                    corpus_tc_name.append(os.path.splitext(os.path.basename(test_path))[0] if test_path else '')
+                # test case path provided directly
+                corpus_test_case_path.append(each_data.get('test_path', ''))
 
         self.corpus = {
-            'corpus_fm': corpus_fm, 
-            'corpus_fm_name': corpus_fm_name, 
+            'corpus_fm': corpus_fm,
+            'corpus_fm_name': corpus_fm_name,
             'corpus_context': corpus_context,
-            'corpus_tc_name': corpus_tc_name, 
+            'corpus_tc_name': corpus_tc_name,
             'corpus_test_case_path': corpus_test_case_path
-            }
+        }
 
 
-def main(target_focal_method, target_focal_file, test_desc, project_path, focal_file_path, query_session: ModelQuerySession | None = None):
+def main(target_focal_method, target_focal_file, test_desc, project_path, focal_file_path, query_session: Optional[ModelQuerySession] = None):
     # project_name = project_path.split('/')[-1]     not compatible with Windows path
     project_name = pathlib.Path(project_path).stem
     # replace the disk letter to upper case to match CodeQL path 
@@ -98,7 +124,22 @@ def main(target_focal_method, target_focal_file, test_desc, project_path, focal_
     target_test_case_desc = test_desc_data['test_desc']['under_setting']
 
     # TODO LSP now cannot run in Windows
-    offline_fact_ref_data = dataset.load_offline_fact_ref_data()
+    try:
+        offline_fact_ref_data = dataset.load_offline_fact_ref_data()
+    except FileNotFoundError:
+        # Fallback: construct empty facts/references with proper length
+        corpus_len = len(intention_test.corpus['corpus_fm_name']) if intention_test.corpus else 0
+        offline_fact_ref_data = [
+            {
+                'target_coverage_idx': i,
+                'rag_references': [],
+                'disc_facts': [],
+                'disc_facts_sim': [],
+                'top_usages': [],
+                'top_usages_sim': []
+            }
+            for i in range(corpus_len)
+        ]
 
     # prepare test generator
     dtester = IntentionTester(configs)

@@ -8,9 +8,12 @@ import { marked } from 'marked';
 import { ExtensionMetadata } from './constants';
 import { showANewEditorForInput } from './utils';
 
+let activeSession: TesterSession | undefined;
+
 export function activate(context: vscode.ExtensionContext): void {
     const viewId = 'testView.sidebar';
     const testerWebViewProvider = new TesterWebViewProvider(context);
+    testerWebViewProvider.setMessageHandler((msg) => handleWebviewCommand(msg, testerWebViewProvider));
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(viewId, testerWebViewProvider, {
@@ -132,15 +135,24 @@ async function generateTest(focalMethod: string, focalFile: string, testDesc: st
         },
         connectToPort
     );
+    activeSession = session;
+    await sendSessionState(ui, 'running');
     await ui.showMessage({
         role: 'system-wait',
         content: 'Server is preparing...'
     });
     // await session.connect();
-    await session.startQuery(generateParams, (e: any) => {
-        vscode.window.showErrorMessage(`Query error when connecting to the server: ${e}`);
-        // ui.showMessage({ cmd: 'error', message: 'an error has occurred'});
-    });
+    try {
+        await session.startQuery(generateParams, (e: any) => {
+            vscode.window.showErrorMessage(`Query error when connecting to the server: ${e}`);
+            // ui.showMessage({ cmd: 'error', message: 'an error has occurred'});
+        });
+    } finally {
+        if (activeSession === session) {
+            activeSession = undefined;
+        }
+        await sendSessionState(ui, 'idle');
+    }
 }
 
 // TODO add blocking to prevent 2 sessions at the same time, or allow parallel sessions in new tab
@@ -198,4 +210,34 @@ async function showWait(msg: any, ui: TesterWebViewProvider): Promise<void> {
 
 export function deactivate() { }
 
+async function handleWebviewCommand(msg: any, ui: TesterWebViewProvider): Promise<void> {
+    if (!(msg && msg.cmd)) {
+        return;
+    }
+    if (msg.cmd === 'stop-run') {
+        await stopActiveSession(ui);
+    } else if (msg.cmd === 'clear-chat') {
+        await ui.showMessage({ cmd: 'clear', toIndex: 0 });
+    }
+}
 
+async function stopActiveSession(ui: TesterWebViewProvider): Promise<void> {
+    if (!activeSession) {
+        await sendSessionState(ui, 'idle');
+        return;
+    }
+    try {
+        await activeSession.stopActiveSession();
+    } finally {
+        activeSession = undefined;
+    }
+    await sendSessionState(ui, 'stopped', '生成已被手动停止。');
+}
+
+async function sendSessionState(
+    ui: TesterWebViewProvider,
+    state: 'idle' | 'running' | 'stopped',
+    message?: string
+): Promise<void> {
+    await ui.showMessage({ cmd: 'session-state', state, message });
+}

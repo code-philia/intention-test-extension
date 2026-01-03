@@ -10,7 +10,8 @@ class Configs:
         os.environ['OPENAI_BASE_URL'] = self.openai_url
 
         self.project_name = project_name
-        self.llm_name = 'gpt-4o'
+        # allow overriding model via config.ini -> [openai] model = ...
+        self.llm_name = global_config['openai'].get('model', 'gpt-4o')
 
         self.max_context_len = 1024
         self.max_input_len = 4096
@@ -22,7 +23,8 @@ class Configs:
         else:
             self.workspace = f'{self.root_dir}/intention_test_extension'
 
-        self.corpus_path =  f'{self.workspace}/data/collected_coverages/{project_name}.json'
+        # Align with dump_collect_pairs: it writes to backend/data/{project}.json
+        self.corpus_path =  f'{self.root_dir}/data/{project_name}.json'
         self.project_without_test_file_path = f'{self.workspace}/data/repos_removing_test/{project_name}'
         self.project_with_test_file_path = f'{self.workspace}/data/repos_with_test/{project_name}'
         
