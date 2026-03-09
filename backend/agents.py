@@ -1,9 +1,11 @@
 import os
 import re
-
 import time
+import logging
 
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 
 class Agent:
@@ -20,11 +22,11 @@ class Agent:
         self.seed = 1203
         self.max_completion_tokens = 5120
 
-    def get_response(self, messages, n=1, skip_deepseek_think: bool=False):
+    def get_response(self, messages, n=1, skip_deepseek_think: bool=False, stream_callback=None):
         if self.model_name == 'gpt-4o' or self.model_name == 'gpt-3.5-turbo':
             if self.system_prompt:
                 messages = [{'role': 'system', 'content': self.system_prompt}] + messages
-            response = self._get_gpt_response(messages, n=n)
+            response = self._get_gpt_response(messages, n=n, stream_callback=stream_callback)
         elif self.model_name in ('deepseek-7B', 'deepseek-32B', 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B'):
             if self.system_prompt:
                 messages[0]['content'] = self.system_prompt + '\n\n\n' + messages[0]['content']
@@ -41,34 +43,97 @@ class Agent:
         else:
             raise ValueError(f"Unknown LLM name: {self.model_name}")
         return response
-    
-    def _get_gpt_response(self, messages, n=1):
+
+    def _get_gpt_response(self, messages, n=1, stream_callback=None):
         response = []
         max_tries = n + 2
         n_tries = 0
+        
+        # For streaming with callback, we can only process one response at a time
+        if stream_callback and n > 1:
+            logger.warning("Streaming with callback only supports n=1, adjusting n to 1")
+            n = 1
+            
         while len(response) < n:
             s_time = time.time()
             try:
-                print(f'\n\n{messages}\n\n')
-                each_response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    temperature=self.temp,
-                    top_p=self.top_p,
-                    seed=self.seed,
-                    stream=False,
-                    max_tokens=self.max_completion_tokens,
-                    n=n,
-                )
+                logger.debug(f'Sending request to {self.model_name} with {len(messages)} messages')
+                if stream_callback:
+                    stream = self.client.chat.completions.create(
+                        model=self.model_name,
+                        messages=messages,
+                        temperature=self.temp,
+                        top_p=self.top_p,
+                        seed=self.seed,
+                        stream=True,
+                        max_completion_tokens=self.max_completion_tokens,
+                        n=1,  # streaming only supports n=1
+                    )
+                    
+                    # Process streaming response
+                    collected_content = ""
+                    # Create the assistant message that will be updated
+                    assistant_message = {"role": "assistant", "content": ""}
+                    updated_messages = messages + [assistant_message]
+                    
+                    for chunk in stream:
+                        if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content is not None:
+                            delta_content = chunk.choices[0].delta.content
+                            collected_content += delta_content
+                            # Update the assistant message content
+                            assistant_message["content"] = collected_content
+                            # Call the update callback with the updated messages
+                            stream_callback(updated_messages)
+                            logger.debug(f'Streaming update: {collected_content[-50:]}')
+
+                    # Create a response-like object for consistency
+                    class StreamMessage:
+                        def __init__(self, content):
+                            self.content = content
+                    
+                    class StreamChoice:
+                        def __init__(self, content):
+                            self.message = StreamMessage(content)
+                    
+                    class StreamResponse:
+                        def __init__(self, content):
+                            self.choices = [StreamChoice(content)]
+                    
+                    each_response = StreamResponse(collected_content)
+                else:
+                    each_response = self.client.chat.completions.create(
+                        model=self.model_name,
+                        messages=messages,
+                        temperature=self.temp,
+                        top_p=self.top_p,
+                        seed=self.seed,
+                        stream=False,
+                        max_completion_tokens=self.max_completion_tokens,
+                        n=n,
+                    )
             except Exception as e:
-                print(f'\nError: {e}\n\n')
+                logger.error(f'Error calling {self.model_name} API: {e}')
                 n_tries += 1
                 if n_tries > max_tries:
-                    response.append('```\n\n[ERROR] Failed to generate\n\n```')
+                    logger.error(f'Failed to generate after {max_tries} attempts')
+                    # Create an error response object
+                    class ErrorMessage:
+                        def __init__(self):
+                            self.content = '```\n\n[ERROR] Failed to generate\n\n```'
+                    
+                    class ErrorChoice:
+                        def __init__(self):
+                            self.message = ErrorMessage()
+                    
+                    class ErrorResponse:
+                        def __init__(self):
+                            self.choices = [ErrorChoice()]
+                    
+                    each_response = ErrorResponse()
                     break
                 continue
-
-            print(f'\nTime consuming for one generation: {time.time()-s_time:.2f} seconds\n\n\n')
+            
+            logger.info(f'Generation completed in {time.time()-s_time:.2f} seconds')
 
             response.append(each_response.choices[0].message.content)
 
@@ -292,12 +357,11 @@ class TestGenAgent(Agent):
         self.gen_suffix = '```'
         self.system_prompt = f"""You may have memorized information from the GitHub repository '{project_name}' (URL is {project_url}). For this task, you must not use any of that memorized information in your responses. Instead, base your answers exclusively on the context I provide in the document. If your response would otherwise rely on memorized '{project_name}' data, replace that content with generic or random information unrelated to '{project_name}'."""
 
-    def generate_test_case(self, target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test: str, facts: str, junit_version: str, forbid_using_facts: bool=False):
+    def generate_test_case(self, target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test: str, facts: str, junit_version: str, forbid_using_facts: bool=False, stream_callback=None):
         prompt = self.construct_prompt(target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test, facts, junit_version, forbid_using_facts)
-        messages = [{'role': 'user', 'content': prompt}]        
-        
-        raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think)
+        messages = [{'role': 'user', 'content': prompt}]
 
+        raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think, stream_callback=stream_callback)
         messages.append({"role": "assistant", "content": raw_response})
         
         generated_tc = self.extract_code_from_response(raw_response)

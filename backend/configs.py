@@ -23,7 +23,7 @@ class Configs:
         else:
             self.workspace = f'{self.root_dir}/intention_test_extension'
 
-        self.corpus_path =  f'{self.workspace}/data/collected_coverages/{project_name}.json'
+        self.corpus_path =  f'{self.workspace}/data/{project_name}.json'
         self.project_without_test_file_path = f'{self.workspace}/data/repos_removing_test/{project_name}'
         self.project_with_test_file_path = f'{self.workspace}/data/repos_with_test/{project_name}'
         
@@ -36,7 +36,7 @@ class Configs:
         self.fact_set_dir = f'{self.root_dir}/data/fact_set/{project_name}'
 
         # project url used for system prompt
-        self.project_url = {
+        project_urls = {
             "itext-java": 'https://github.com/itext/itext-java',
             "hutool": 'https://github.com/chinabugotech/hutool',
             "yavi": 'https://github.com/making/yavi',
@@ -50,7 +50,11 @@ class Configs:
             "spark": 'https://github.com/perwendel/spark',
             "awesome-algorithm": 'https://github.com/codeartx/awesome-algorithm',
             "jInstagram": 'https://github.com/sachin-handiekar/jInstagram'
-        }[project_name]
+        }
+        
+        self.project_url = project_urls.get(project_name)
+        if self.project_url is None:
+            raise ValueError(f"Unknown project name: {project_name}. Supported projects: {list(project_urls.keys())}")
 
 
     def is_corpus_prepared(self):

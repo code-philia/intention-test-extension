@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
+import { TesterSession } from './client';
+import { ExtensionMetadata } from './constants';
 import { CodeHistoryDiffPlayer, virtualFileSystemRegister } from './diffView';
 import { GenTestCodeLensProvider } from './inlineCodeLens';
+import { customClientRequestHandler } from './messageHandler';
 import { setWebRoot, TesterWebViewProvider } from './sidebarView';
-import { TesterSession } from './client';
 import { detectCodeLang, extractGenTestCode, extractRefTestCode, langSuffix, shouldGenTestPrompt } from './textUtils';
-import { marked } from 'marked';
-import { ExtensionMetadata } from './constants';
 import { showANewEditorForInput } from './utils';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -83,7 +83,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ),
         virtualFileSystemRegister
     );
-    setWebRoot(context.asAbsolutePath('web'));
+    setWebRoot(context.asAbsolutePath('../web/dist'));
 }
 
 async function generateTest(focalMethod: string, focalFile: string, testDesc: string, projectAbsPath: string, focalFileAbsPath: string, ui: TesterWebViewProvider): Promise<void> {
@@ -102,21 +102,37 @@ async function generateTest(focalMethod: string, focalFile: string, testDesc: st
 
     let prevMessages: any[] = [];
     let phase = 'init';
+    let processedMessageIds = new Set<string>(); // Track processed message IDs
+    let processedMessageContent = new Map<string, string>(); // Track processed message content by ID
     const diffPlayer = new CodeHistoryDiffPlayer();
 
     const reactToNewMessages = async (messages: any[]) => {
-        // start updating from first different message
-        let _i = 0;
-        for (; _i < prevMessages.length && _i < messages.length; _i++) {
-            if (!(messages[_i].role === prevMessages[_i].role
-                && messages[_i].content === prevMessages[_i].content)) {
-                break;
+        // Process only messages that haven't been processed before or have changed content
+        for (let i = 0; i < messages.length; i++) {
+            const message = messages[i];
+            // Check if message has an ID
+            if (message.id) {
+                const previousContent = processedMessageContent.get(message.id);
+                // Process if never seen before or content has changed
+                if (!processedMessageIds.has(message.id) || previousContent !== message.content) {
+                    processedMessageIds.add(message.id);
+                    processedMessageContent.set(message.id, message.content);
+                    phase = await updateMessage(message, i, messages, ui, diffPlayer, phase);
+                }
+            } else {
+                // For messages without ID, use the old comparison logic as fallback
+                let shouldProcess = true;
+                if (i < prevMessages.length) {
+                    if (messages[i].role === prevMessages[i].role && 
+                        messages[i].content === prevMessages[i].content) {
+                        shouldProcess = false;
+                    }
+                }
+                if (shouldProcess) {
+                    phase = await updateMessage(message, i, messages, ui, diffPlayer, phase);
+                }
             }
         }
-        for (let i = _i; i < messages.length; i++) {
-            phase = await updateMessage(messages[i], i, messages, ui, diffPlayer, phase);
-        }
-        await showWait(messages.at(-1), ui);
         prevMessages = messages;
     };
 
@@ -130,7 +146,8 @@ async function generateTest(focalMethod: string, focalFile: string, testDesc: st
         (junit_version) => {
             vscode.window.showInformationMessage('No referable test cases. Generating target test case without reference... JUnit version of ' + junit_version + ' is used. If you want to change the JUnit version, please use the command "IntentionTest: Change JUnit Version".');
         },
-        connectToPort
+        connectToPort,
+        customClientRequestHandler
     );
     await ui.showMessage({
         role: 'system-wait',
@@ -139,6 +156,7 @@ async function generateTest(focalMethod: string, focalFile: string, testDesc: st
     // await session.connect();
     await session.startQuery(generateParams, (e: any) => {
         vscode.window.showErrorMessage(`Query error when connecting to the server: ${e}`);
+        console.error('Query error when connecting to the server: ', e.stack);
         // ui.showMessage({ cmd: 'error', message: 'an error has occurred'});
     });
 }
@@ -158,9 +176,13 @@ async function updateMessage(msg: any, i: number, allMsg: any, ui: TesterWebView
     content = content.replace(/```.*?```/gs, (s: string) => {
         return s.replace(/^[0-9]+:/gm, '');
     });
+    content = content.replace(/```(.*?)```/gs, (match: string, p1: string) => {
+        return `\`\`\`java${p1}\`\`\``;
+    });
     await ui.showMessage({
         role: msg.role,
-        content: marked.parse(content)
+        content: content,
+        id: msg.id // Pass through the message ID from server
     });
 
     // show test code diff if matches
@@ -179,21 +201,6 @@ async function updateMessage(msg: any, i: number, allMsg: any, ui: TesterWebView
         addTestCode(test);
     }
     return phase;
-}
-
-// TODO let backend determine the next step of what type to wait
-async function showWait(msg: any, ui: TesterWebViewProvider): Promise<void> {
-    // show wait
-    const nextRole = msg.role === 'system'
-        ? 'user'
-        : (msg.role === 'user' ? 'assistant' : 'user');
-
-    if (!(msg.content.trim().startsWith('FINISH GENERATION'))) {
-        await ui.showMessage({
-            role: nextRole + '-wait',
-            content: 'Waiting...'
-        });
-    }
 }
 
 export function deactivate() { }

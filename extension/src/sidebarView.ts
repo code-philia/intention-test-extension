@@ -1,9 +1,6 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
 import * as fs from 'fs';
-import * as marked from 'marked';
-import { detectCodeLang, extractGenTestCode, extractRefTestCode, isGenTestPrompt, langSuffix, shouldGenTestPrompt } from './textUtils';
-import { CodeHistoryDiffPlayer } from './diffView';
+import * as path from 'path';
+import * as vscode from 'vscode';
 
 let webRoot = '.';
 const onlineResourceUrlPattern = '(?!http:\\/\\/|https:\\/\\/)([^"]*\\.[^"]+)';
@@ -32,11 +29,10 @@ export class TesterWebViewProvider implements vscode.WebviewViewProvider {
 
         this._view?.onDidReceiveMessage(async (msg) => {
             if (msg.cmd === 'open-code' && msg.content && msg.lang) {
-                const doc = await vscode.workspace.openTextDocument({ language: msg.lang, content: msg.content });
-                vscode.window.showTextDocument(doc);
+            const doc = await vscode.workspace.openTextDocument({ language: msg.lang, content: msg.content });
+            vscode.window.showTextDocument(doc);
             }
         });
-
     }
 
     private getHtmlContent(): string {
