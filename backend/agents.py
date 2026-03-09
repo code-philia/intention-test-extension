@@ -66,7 +66,7 @@ class Agent:
                         top_p=self.top_p,
                         seed=self.seed,
                         stream=True,
-                        max_completion_tokens=self.max_completion_tokens,
+                        max_tokens=self.max_completion_tokens,
                         n=1,  # streaming only supports n=1
                     )
                     
@@ -108,7 +108,7 @@ class Agent:
                         top_p=self.top_p,
                         seed=self.seed,
                         stream=False,
-                        max_completion_tokens=self.max_completion_tokens,
+                        max_tokens=self.max_completion_tokens,
                         n=n,
                     )
             except Exception as e:
