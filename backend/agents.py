@@ -57,17 +57,17 @@ class Agent:
                     top_p=self.top_p,
                     seed=self.seed,
                     stream=False,
-                    max_completion_tokens=self.max_completion_tokens,
+                    max_tokens=self.max_completion_tokens,
                     n=n,
                 )
             except Exception as e:
                 print(f'\nError: {e}\n\n')
                 n_tries += 1
                 if n_tries > max_tries:
-                    each_response = '```\n\n[ERROR] Failed to generate\n\n```'
+                    response.append('```\n\n[ERROR] Failed to generate\n\n```')
                     break
                 continue
-            
+
             print(f'\nTime consuming for one generation: {time.time()-s_time:.2f} seconds\n\n\n')
 
             response.append(each_response.choices[0].message.content)
@@ -91,7 +91,7 @@ class Agent:
                     temperature=self.temp,
                     seed=self.seed,
                     stream=False,
-                    max_completion_tokens=self.max_completion_tokens,
+                    max_tokens=self.max_completion_tokens,
                     n=n,
                 )
             except Exception as e:
@@ -124,10 +124,10 @@ class Agent:
                 
                 n_tries += 1
                 if n_tries > max_tries:
-                    each_response = '```\n\n[ERROR] Failed to generate\n\n```'
+                    response.append('```\n\n[ERROR] Failed to generate\n\n```')
                     break
                 continue
-            
+
             print(f'\nTime consuming for one generation: {time.time()-s_time:.2f} seconds\n\n\n')
 
             response.append(each_response.choices[0].message.content)
@@ -154,7 +154,7 @@ class Agent:
                     temperature=0.6,
                     seed=self.seed,
                     stream=False,
-                    max_completion_tokens=self.max_completion_tokens,
+                    max_tokens=self.max_completion_tokens,
                     n=1
                 )
             except Exception as e:
