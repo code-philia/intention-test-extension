@@ -116,11 +116,12 @@ class TestCaseRunner():
         setattr(self, f'cur_{is_ref}_ref_log_name', f'{focal_method_name}_{index}_{suffix}')
 
         cwd_path = test_case_path.split('/src/test/')[0]
+        cmd = f'mvn clean verify -Dtest={test_case_relative_path} -Dcheckstyle.skip=true'
 
-        cmd = f"cd {cwd_path} && mvn clean verify -Dtest={test_case_relative_path} -Dcheckstyle.skip=true > '{log_file_path}' 2>&1"
-
-        logger.debug(f'Running test case: f{cmd}')
-        os.system(cmd)
+        logger.debug(f'Running test case: {cmd}')
+        os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+        with open(log_file_path, 'w', encoding='utf8') as log_f:
+            subprocess.run(cmd, cwd=cwd_path, stdout=log_f, stderr=log_f, shell=True, universal_newlines=True)
         return log_file_path
 
     def run_test_case_and_get_coverage(self, test_case, test_case_path, focal_file_path, focal_method_name_parameter, is_ref):
@@ -161,14 +162,18 @@ class TestCaseRunner():
         test_case_relative_path = self.get_test_case_relative_path(test_case_path)
 
         cwd_path = test_case_path.split('/src/test/')[0]
-        mvn_compile_cmd = ['mvn', 'clean', f'-Dtest={test_case_relative_path}', 'test-compile', '-Dcheckstyle.skip=true']
+        mvn_compile_cmd = f'mvn clean -Dtest={test_case_relative_path} test-compile -Dcheckstyle.skip=true'
+        # TEST
+        print(f'Compiling the test case with command: {mvn_compile_cmd}')
+        #
         compile_result = subprocess.run(mvn_compile_cmd, cwd=cwd_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, universal_newlines=True)
         compile_log = f'{compile_result.stdout}\n\n{compile_result.stderr}\n\n'
-
+        print(f'Compile log:\n{compile_log}')
+        
         if "BUILD SUCCESS" in compile_log:
             compile_success = True
 
-            mvn_test_cmd = ['mvn', 'clean', 'verify', f'-Dtest={test_case_relative_path}', '-Dcheckstyle.skip=true']  # test and get the coverage
+            mvn_test_cmd = f'mvn clean verify -Dtest={test_case_relative_path} -Dcheckstyle.skip=true'
             test_result = subprocess.run(mvn_test_cmd, cwd=cwd_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, universal_newlines=True)
             test_log = f'{test_result.stdout}\n\n{test_result.stderr}'
             if "BUILD SUCCESS" in test_log:

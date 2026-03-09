@@ -1,9 +1,10 @@
 from user_config import global_config
 import os
+import pathlib
 
 class Configs:
     def __init__(self, project_name, tester_path = '') -> None:
-        self.root_dir = os.path.abspath(os.path.dirname(__file__))
+        self.root_dir = pathlib.Path(os.path.abspath(os.path.dirname(__file__))).as_posix()
         self.openai_api_key = global_config['openai']['apikey']
         self.openai_url = global_config['openai']['url']
         os.environ['OPEN_AI_KEY'] = self.openai_api_key
