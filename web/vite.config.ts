@@ -4,6 +4,11 @@ import { viteStaticCopy } from 'vite-plugin-static-copy'
 
 // https://vite.dev/config/
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@douyinfe/semi-ui/dist/css/semi.min.css': new URL('./node_modules/@douyinfe/semi-ui/dist/css/semi.min.css', import.meta.url).pathname
+    }
+  },
   plugins: [
     react(),
     viteStaticCopy({
