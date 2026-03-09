@@ -1,6 +1,13 @@
 import re
 import torch
 import numpy as np
+
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"
+else:
+    DEVICE = "cpu"
 from nltk.corpus import stopwords
 from typing import List
 from rank_bm25 import BM25Okapi
@@ -14,7 +21,7 @@ class Retriever():
     ) -> None:
         super().__init__()
         self.top_k_fm = 30 
-        self.embedding_model = embedding_model if embedding_model is not None else AutoModel.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True).eval().to('cuda')
+        self.embedding_model = embedding_model if embedding_model is not None else AutoModel.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True).eval().to(DEVICE)
         self.tokenizer = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True)
         self.corpus_cov = corpus_cov
         self.corpus_fm = corpus_fm
@@ -82,7 +89,7 @@ class Retriever():
     
     @torch.no_grad()
     def tc_desc_embedding(self, test_desc):
-        inputs = self.tokenizer.encode(test_desc, return_tensors="pt", truncation=True).to("cuda")
+        inputs = self.tokenizer.encode(test_desc, return_tensors="pt", truncation=True).to(DEVICE)
         embedding = self.embedding_model(inputs)[0]
         return embedding
     

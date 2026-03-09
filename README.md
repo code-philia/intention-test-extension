@@ -28,7 +28,12 @@ First install the requirements:
 
 ```shell
 cd backend
+
+# For CPU / Apple Silicon
 pip install -r requirements.txt
+
+# For NVIDIA GPU (CUDA 12.4)
+pip install -r requirements-cuda.txt
 ```
 
 Modify the `backend/config.ini`:
@@ -36,6 +41,7 @@ Modify the `backend/config.ini`:
 ```ini
 [openai]
 apikey = your-open-ai-key
+url = https://api.openai.com/v1
 
 [tools]
 codeql = your-path-to-code-ql-executable
