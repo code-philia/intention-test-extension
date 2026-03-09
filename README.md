@@ -59,15 +59,25 @@ python server.py --port 12345
 
 ### Run the extension in debug mode
 
-First install node dependencies from project root:
+First build the React frontend:
 
 ```shell
+cd web
+npm install
+npm run build
+cd ..
+```
+
+Then install the extension dependencies:
+
+```shell
+cd extension
 npm install
 ```
 
 Then in VS Code, start the extension by the `Run Extension` debug option.
 
-If you have specify another port when starting backend server,
+If you have specified another port when starting the backend server,
 change the port in **settings of the new Extension Development Host window** via `Intention Test: Port` before generating test cases.
 
 ### Use the demo project to try our tool
