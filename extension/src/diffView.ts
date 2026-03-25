@@ -1,5 +1,5 @@
-import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import * as vscode from 'vscode';
 import { closeTab, findDiffTab, getActiveTab } from './utils';
 
 const utf8Encoder = new TextEncoder();
@@ -159,6 +159,9 @@ export class CodeHistoryDiffPlayer implements vscode.Disposable {
     }
 
     appendHistory(code: string, name: string, lang: string, showNext: boolean = true): void {
+        if (this.history.at(-1)?.content === code) {
+            return;
+        }
         this.history.push({
             name: name,
             suffix: lang,

@@ -1,8 +1,16 @@
 // Example usage of the enhanced TesterSession with client response handling
 
 import * as fs from 'fs';
+import { readFileSync } from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { resolveWebviewOfflineResourceUri } from './utils';
+
+export const globalContext: vscode.ExtensionContext | undefined = undefined;
+
+export function saveGlobalContext(context: vscode.ExtensionContext) {
+    (globalContext as any) = context;
+}
 
 // Enhanced custom client request handler with file selection support
 export async function customClientRequestHandler(requestData: any): Promise<string> {
@@ -30,9 +38,39 @@ export async function customClientRequestHandler(requestData: any): Promise<stri
             );
             return choiceResult || options[0] || '';
 
+        case 'code-choice':
+            if (globalContext === undefined) {
+                return '';
+            }
+            const context = globalContext;
+            
+            const debugWebviewRoot = context.asAbsolutePath('../dev/monaco-test/dist');
+
+            const panel = vscode.window.createWebviewPanel(
+                'chooseRefinedCode',
+                'Choose a refined version',
+                vscode.ViewColumn.One,
+                {
+                    enableScripts: true,
+                    localResourceRoots: [vscode.Uri.file(debugWebviewRoot)]
+                }
+            );
+
+            panel.webview.html = resolveWebviewOfflineResourceUri(readFileSync(`${debugWebviewRoot}/index.html`).toString(), panel.webview, debugWebviewRoot)
+                .replace("'$CHOICES'", JSON.stringify(options));
+
+            return new Promise<string>((resolve) => {
+                panel.webview.onDidReceiveMessage((message) => {
+                    if (message.command === 'codeSelected') {
+                        resolve(message.code || '');
+                        panel.dispose();
+                    }
+                });
+            });
+
         case 'text':
             // Check if this is a request for a test case file
-            if (prompt.toLowerCase().includes('reference test case') || 
+            if (prompt.toLowerCase().includes('reference test case') ||
                 prompt.toLowerCase().includes('test case')) {
                 return await handleTestCaseRequest(prompt);
             } else {
@@ -55,7 +93,7 @@ async function handleTestCaseRequest(prompt: string): Promise<string> {
     const provideMethod = await vscode.window.showQuickPick(
         [
             'Select a test case file',
-            'Paste test case content', 
+            'Paste test case content',
             'Skip (no reference test case)',
             'Search workspace for test files'
         ],
@@ -68,13 +106,13 @@ async function handleTestCaseRequest(prompt: string): Promise<string> {
     switch (provideMethod) {
         case 'Select a test case file':
             return await selectTestCaseFile();
-            
+
         case 'Paste test case content':
             return await pasteTestCaseContent();
-            
+
         case 'Search workspace for test files':
             return await searchAndSelectTestFile();
-            
+
         case 'Skip (no reference test case)':
         default:
             return '';
@@ -98,7 +136,7 @@ async function selectTestCaseFile(): Promise<string> {
         try {
             const filePath = fileUri[0].fsPath;
             const content = fs.readFileSync(filePath, 'utf8');
-            
+
             // Validate it looks like a test file
             if (isValidTestCase(content)) {
                 vscode.window.showInformationMessage(`Test case loaded from: ${path.basename(filePath)}`);
@@ -112,7 +150,7 @@ async function selectTestCaseFile(): Promise<string> {
             return '';
         }
     }
-    
+
     return '';
 }
 
@@ -129,7 +167,7 @@ async function pasteTestCaseContent(): Promise<string> {
     } else if (content) {
         vscode.window.showWarningMessage('Content does not appear to be a valid test case.');
     }
-    
+
     return '';
 }
 
@@ -152,34 +190,58 @@ async function searchAndSelectTestFile(): Promise<string> {
         const quickPickItems = testFiles.map(uri => ({
             label: path.basename(uri.fsPath),
             description: vscode.workspace.asRelativePath(uri),
-            detail: uri.fsPath,
             uri: uri
         }));
 
-        const selectedItem = await vscode.window.showQuickPick(quickPickItems, {
-            placeHolder: 'Select a test file from your workspace',
-            matchOnDescription: true,
-            matchOnDetail: true
-        });
+        while (true) {
+            const selectedItem = await vscode.window.showQuickPick(quickPickItems, {
+                placeHolder: 'Select a test file from your workspace',
+                matchOnDescription: true,
+                matchOnDetail: true
+            });
 
-        if (selectedItem) {
+            if (!selectedItem) {
+                return '';
+            }
+
             try {
-                const content = fs.readFileSync(selectedItem.uri.fsPath, 'utf8');
-                
-                if (isValidTestCase(content)) {
-                    vscode.window.showInformationMessage(`Test case loaded: ${selectedItem.label}`);
-                    return content;
+                // Open and display the file
+                const document = await vscode.workspace.openTextDocument(selectedItem.uri);
+                await vscode.window.showTextDocument(document, { preview: true });
+
+                // Confirm selection
+                const selection = await vscode.window.showQuickPick(['Yes', 'No'], {
+                    placeHolder: `Do you want to use ${selectedItem.label}?`,
+                    ignoreFocusOut: true
+                });
+
+                // Close the preview editor
+                await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+
+                if (selection === 'Yes') {
+                    const content = document.getText();
+
+                    if (isValidTestCase(content)) {
+                        vscode.window.showInformationMessage(`Test case loaded: ${selectedItem.label}`);
+                        return content;
+                    } else {
+                        vscode.window.showWarningMessage(`File ${selectedItem.label} does not appear to be a valid test case.`);
+                        return '';
+                    }
+                } else if (selection === 'No') {
+                    continue;
                 } else {
-                    vscode.window.showWarningMessage(`File ${selectedItem.label} does not appear to be a valid test case.`);
+                    return '';
                 }
             } catch (error) {
                 vscode.window.showErrorMessage(`Error reading ${selectedItem.label}: ${error}`);
+                return '';
             }
         }
     } catch (error) {
         vscode.window.showErrorMessage(`Error searching for test files: ${error}`);
     }
-    
+
     return '';
 }
 

@@ -5,9 +5,13 @@ import pathlib
 import re
 import sys
 
+from type import AbstractMessageSyncHandler
 from configs import Configs
 from dataset import Dataset
 from generator import IntentionTester
+
+base = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(base / 'tools/extension_api/collect_facts'))
 
 logger = logging.getLogger(__name__)
 
@@ -117,16 +121,36 @@ def find_fact_data_by_method_name(offline_fact_data, focal_method_name):
     return None
 
 
+def _select_path_class(path: str):
+    if ":" in path[:3] or "\\" in path:
+        return pathlib.PureWindowsPath
+    return pathlib.PurePosixPath
+
+def split_project_path(full_path: str, project_name: str):
+    PathCls = _select_path_class(full_path)
+    p = PathCls(full_path)
+    parts = p.parts
+
+    try:
+        idx = next(i for i, part in enumerate(parts) if part.lower() == project_name.lower())
+    except StopIteration as e:
+        raise ValueError(f"project name {project_name!r} not found in path") from e
+
+    project_path = PathCls(*parts[:idx + 1])
+    relative_path = PathCls(*parts[idx + 1:])
+    return str(project_path), str(relative_path)
+
+
 def run_test_generation_chat(
     target_focal_method: str,
     target_focal_file: str,
     test_desc: str,
     project_path: str,
     focal_file_path: str,
-    query_session=None,
+    query_session: AbstractMessageSyncHandler | None=None,
 ):
     logger.info(
-        "Running test generation chat\ntarget_focal_method: %s\ntarget_focal_file: %s\ntest_desc: %s\nproject_path: %s\nfocal_file_path: %s",
+        "Running test generation chat\ntarget_focal_method:\n%s\ntarget_focal_file: %s\ntest_desc: %s\nproject_path: %s\nfocal_file_path: %s",
         target_focal_method,
         target_focal_file,
         test_desc,
@@ -141,7 +165,7 @@ def run_test_generation_chat(
         lambda s: s[0].upper(),
         pathlib.Path(__file__).parent.absolute().as_posix(),
     )
-    configs = Configs(project_name, tester_path)
+    configs = Configs(project_name, project_path, tester_path)
 
     class_name = os.path.splitext(os.path.basename(focal_file_path))[0]
     focal_method_name = f"{class_name}::::"
@@ -159,13 +183,11 @@ def run_test_generation_chat(
         intention_tester.connect_to_request_session(query_session)
 
     # /intention_test_extension/data/repos_removing_test/spark/src/test/java/spark/embeddedserver/jetty/EmbeddedJettyFactoryTest.java
-    project_without_test_file_dir = os.path.dirname(
-        configs.project_without_test_file_path
-    )
+    project_without_test_file_dir = project_path
 
     without_test_focal_file_path = (
         pathlib.Path(project_without_test_file_dir)
-        / focal_file_path[focal_file_path.index(project_name) :]
+        / split_project_path(focal_file_path, project_name)[1]
     ).as_posix()
     target_test_case_path = without_test_focal_file_path.replace(
         "src/main/java", "src/test/java"
@@ -187,13 +209,16 @@ def run_test_generation_chat(
         )
 
         # Import the fact collection function
-        from standalone.collect_fact_offline_standalone import collect_facts
+        from tools.extension_api.collect_facts.main import collect_facts
 
         # Collect facts with default parameters
-        collected_facts, save_path = collect_facts(
-            project_name=configs.project_name, project_path=project_path
+        collect_facts(
+            project_path,
+            configs.collected_coverages_json,
+            configs.test_desc_json,
+            configs.fact_set_dir,
+            project_name=project_name
         )
-        logger.info("Fact collection completed. Saved to: %s", save_path)
     else:
         logger.info("Fact reference data found at %s", fact_ref_data_path)
 
@@ -213,8 +238,10 @@ def run_test_generation_chat(
         )  # Use existing if not in fact data
     else:
         logger.warning(
-            "No matching fact data found for focal method: %s", focal_method_name
+            "No matching fact data found for focal method:\n%s", focal_method_name
         )
+
+    # 1. ref test case
 
     ref_score, ref_focal_method, ref_test_case = retrieve_reference_offline_by_name(
         offline_fact_ref_data, focal_method_name
@@ -226,7 +253,11 @@ def run_test_generation_chat(
     else:
         top_1_reference_tc_rag = None
 
-    # # collect facts
+    if isinstance(top_1_reference_tc_rag, list):
+        top_1_reference_tc_rag = "\n".join(top_1_reference_tc_rag)
+
+    # 2. facts
+
     facts, facts_sim, usages, usages_sim = get_crucial_facts_offline_by_name(
         offline_fact_ref_data, focal_method_name
     )
@@ -241,16 +272,14 @@ def run_test_generation_chat(
             target_test_case_path=target_test_case_path,
             referable_test_case=top_1_reference_tc_rag,
             facts=facts,
-            junit_version=str(query_session.junit_version)
-            if query_session is not None
-            else 5,
+            junit_version=str(query_session.junit_version) if query_session is not None else "5",
         )
     )
 
     return messages, generated_test_case
 
 
-def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_k=1):
+def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_k=5):
     """
     Search for reference data by focal method name instead of index.
     """
@@ -258,11 +287,15 @@ def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_
     fact_data = find_fact_data_by_method_name(offline_ref_data, focal_method_name)
 
     if fact_data is not None:
-        if len(fact_data["rag_references"]) == 0:
+        rag_refs = fact_data["rag_references"]
+        if len(rag_refs) == 0:
             return [], [], []
         else:
-            ref_score, ref_focal_method, ref_test_case = fact_data["rag_references"][0]
-            return ref_score, ref_focal_method, ref_test_case
+            top_refs = rag_refs[:top_k]
+            ref_scores = [r[0] for r in top_refs]
+            ref_focal_methods = [r[1] for r in top_refs]
+            ref_test_cases = [r[2] for r in top_refs]
+            return ref_scores, ref_focal_methods, ref_test_cases
 
     # No match found
     logger.warning("No reference data found for focal method: %s", focal_method_name)
@@ -270,18 +303,21 @@ def retrieve_reference_offline_by_name(offline_ref_data, focal_method_name, top_
 
 
 def retrieve_reference_offline(
-    coverage_idx, offline_ref_data, focal_method_name, top_k=1
+    coverage_idx, offline_ref_data, focal_method_name, top_k=3
 ):
     info = offline_ref_data[coverage_idx]
     assert info["target_coverage_idx"] == coverage_idx
     # assert focal_method_name == info['focal_method_name']
-    assert top_k == 1  # for now, only consider the top 1
 
     if len(info["rag_references"]) == 0:
         return [], [], []
     else:
-        ref_score, ref_focal_method, ref_test_case = info["rag_references"][0]
-        return ref_score, ref_focal_method, ref_test_case
+        rag_refs = info["rag_references"]
+        top_refs = rag_refs[:top_k]
+        ref_scores = [r[0] for r in top_refs]
+        ref_focal_methods = [r[1] for r in top_refs]
+        ref_test_cases = [r[2] for r in top_refs]
+        return ref_scores, ref_focal_methods, ref_test_cases
 
 
 def get_crucial_facts_offline_by_name(

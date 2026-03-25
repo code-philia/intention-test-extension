@@ -29,6 +29,16 @@
         "command": "intentionTest.changeJunitVersion",
         "category": "IntentionTest",
         "title": "Change JUnit Version"
+      },
+      {
+        "command": "intentionTest.showDebugEditorWebview",
+        "category": "IntentionTest",
+        "title": "Show Debug Editor Webview"
+      },
+      {
+        "command": "intentionTest.generateCoverageAndDescription",
+        "category": "IntentionTest",
+        "title": "Generate Coverages and Test Descriptions"
       }
     ],
     "viewsContainers": {
@@ -56,6 +66,16 @@
           "type": "number",
           "default": 8080,
           "description": "Localhost port to connect to."
+        },
+        "intentionTest.enableJacoco": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable JaCoCo for slower but more accurate focal method matching."
+        },
+        "intentionTest.testSuffix": {
+          "type": "string",
+          "default": "Test",
+          "description": "Suffix for test classes (e.g. Test, Tests, TestCase)."
         }
       }
     },
@@ -89,6 +109,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
+    "axios": "^1.13.2",
     "marked": "^14.0.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-java": "^0.21.0",

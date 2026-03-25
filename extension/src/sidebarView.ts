@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { resolveWebviewOfflineResourceUri } from './utils';
 
 let webRoot = '.';
-const onlineResourceUrlPattern = '(?!http:\\/\\/|https:\\/\\/)([^"]*\\.[^"]+)';
 
 export function setWebRoot(root: string) {
     webRoot = root;
@@ -42,27 +42,14 @@ export class TesterWebViewProvider implements vscode.WebviewViewProvider {
 
     private getResolvedHtmlContent(): string {
         if (this._view) {
-            // return this.getHtmlContent();
-            return this.replaceUri(this.getHtmlContent(), this._view, onlineResourceUrlPattern);
+            return resolveWebviewOfflineResourceUri(this.getHtmlContent(), this._view, webRoot);
         }
         else {
             return this.getHtmlContent();
         }
     }
 
-    private replaceUri(html: string, webview: vscode.Webview, srcPattern: string): string {
-        const cssFormattedHtml = html.replace(new RegExp(`(?<=href\="|src\=")${srcPattern}(?=")`, 'g'), (match, ...args) => {
-            if (match) {
-                const formattedCss = webview.asWebviewUri(vscode.Uri.file(path.join(webRoot, args[0])));
-                return formattedCss.toString();
-            }
-            return "";
-        });
-    
-        return cssFormattedHtml;
-    }
-
-    public async showMessage(message: any): Promise<void> {
+    public async updateMessage(message: any): Promise<void> {
         this._view?.postMessage(message);
     }
 }

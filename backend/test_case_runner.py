@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import shutil
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 import subprocess
@@ -15,6 +16,32 @@ logger = logging.getLogger(__name__)
 # }
 # env_vars = os.environ.copy()
 # env_vars.update(JAVA_ENVS)
+
+
+def run_maven_command(
+    mvn_args: list[str],
+    cwd_path: str,
+    encoding: str = 'utf-8',
+) -> tuple[str, int]:
+    mvn_exe = shutil.which('mvn.cmd') or shutil.which('mvn')
+    if not mvn_exe:
+        raise FileNotFoundError('Maven not found in PATH. Install Maven or add it to PATH.')
+
+    result = subprocess.run(
+        [mvn_exe, *mvn_args],
+        cwd=cwd_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        check=False,
+        text=False,
+    )
+
+    stdout_text = result.stdout.decode(encoding, errors='replace')
+    stderr_text = result.stderr.decode(encoding, errors='replace')
+    log = f'{stdout_text}\n\n{stderr_text}'
+    return log, result.returncode
+
 
 class Buffer:
     def __init__(self):
@@ -64,7 +91,7 @@ class TestCaseRunner():
         return buffer
     
     def run_with_err_out(self, *args, **kwargs):
-        process = subprocess.run(*args, **kwargs)
+        process = subprocess.run(*args, **kwargs, check=False)
         if process.returncode != 0:
             def get_str(byte_or_str):
                 return byte_or_str.decode('utf-8') if type(byte_or_str) == bytes else byte_or_str
@@ -87,8 +114,8 @@ class TestCaseRunner():
 
             log_path, focal_file_coverage, fm_cov_statistic_by_jacoco = self.run_test_case_and_get_coverage(tc, tc_path, focal_file_path, fm_name_param, is_ref=is_ref)
             each_test_case[f'log_path_{is_ref}'] = log_path
-            each_test_case[f'coverage_focal_file'] = focal_file_coverage  # used for analyze_coverage_with_target_coverage()
-            each_test_case[f'coverage_focal_method'] = fm_cov_statistic_by_jacoco  # used for analyze_coverage_with_target_focal_method()
+            each_test_case['coverage_focal_file'] = focal_file_coverage  # used for analyze_coverage_with_target_coverage()
+            each_test_case['coverage_focal_method'] = fm_cov_statistic_by_jacoco  # used for analyze_coverage_with_target_focal_method()
 
             test_case_with_log_coverage.append(each_test_case)
         return test_case_with_log_coverage
@@ -160,23 +187,22 @@ class TestCaseRunner():
         test_case_relative_path = self.get_test_case_relative_path(test_case_path)
 
         cwd_path = test_case_path.split('/src/test/')[0]
-        mvn_compile_cmd = f'mvn clean -Dtest={test_case_relative_path} test-compile -Dcheckstyle.skip=true'
-        # TEST
-        print(f'Compiling the test case with command: {mvn_compile_cmd}')
-        #
-        compile_result = subprocess.run(mvn_compile_cmd, cwd=cwd_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, universal_newlines=True)
-        compile_log = f'{compile_result.stdout}\n\n{compile_result.stderr}\n\n'
-        print(f'Compile log:\n{compile_log}')
-        
+        compile_log, _ = run_maven_command(
+            ['clean', f'-Dtest={test_case_relative_path}', 'test-compile', '-Dcheckstyle.skip=true'],
+            cwd_path,
+        )
+
         if "BUILD SUCCESS" in compile_log:
             compile_success = True
 
-            mvn_test_cmd = f'mvn clean verify -Dtest={test_case_relative_path} -Dcheckstyle.skip=true'
-            test_result = subprocess.run(mvn_test_cmd, cwd=cwd_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, universal_newlines=True)
-            test_log = f'{test_result.stdout}\n\n{test_result.stderr}'
+            test_log, _ = run_maven_command(
+                ['clean', 'verify', f'-Dtest={test_case_relative_path}', '-Dcheckstyle.skip=true'],
+                cwd_path,
+            )
+
             if "BUILD SUCCESS" in test_log:
                 execute_success = True
-        
+
         return compile_log, test_log, compile_success, execute_success
 
     def get_test_case_relative_path(self, test_case_path):
@@ -236,7 +262,7 @@ class TestCaseRunner():
     # copy from /bernard/dataset_construction/human_written_tests/v2/utils.py
     def get_lines_coverage(self, jacoco_java_html_report_path):
         with open(jacoco_java_html_report_path, encoding='utf8') as f:
-            soup = BeautifulSoup(f, 'html.parser')
+            soup = BeautifulSoup(f.read(), 'html.parser')
             # find all spans with class 'fc' or 'pc' or 'bpc', and extract the ID
             cov_lines = []
             uncov_lines = []
@@ -251,7 +277,7 @@ class TestCaseRunner():
 
     def get_focal_method_coverage_statistic_by_jacoco(self, focal_method_name_param, jacoco_html_report_path):
         with open(jacoco_html_report_path, encoding='utf8') as f:
-            soup = BeautifulSoup(f, 'html.parser')
+            soup = BeautifulSoup(f.read(), 'html.parser')
 
         # example: focal_method_name_param is intersectionDistinct(java.util.Collection<T>,java.util.Collection<T>,java.util.Collection<T>[]). to match intersectionDistinct(Collection, Collection, Collection[])
         # example: valuesOfKeys(java.util.Map<K, V>,K[]) to match valuesOfKeys(Map, Object[])
@@ -267,19 +293,20 @@ class TestCaseRunner():
 
         candidates = []
         table = soup.find('tbody')
-        for each_tr in table.find_all('tr'):
-            # check the method name
-            candidate_all_column = each_tr.find_all('td')
+        if table is not None:
+            for each_tr in table.find_all('tr'):
+                # check the method name
+                candidate_all_column = each_tr.find_all('td')
 
-            method_name = candidate_all_column[0].text
-            candidate_fm_name = method_name.strip().split('(')[0]
-            if candidate_fm_name != target_fm_name:
-                continue
-            
-            candidates.append(candidate_all_column)
+                method_name = candidate_all_column[0].text
+                candidate_fm_name = method_name.strip().split('(')[0]
+                if candidate_fm_name != target_fm_name:
+                    continue
+                
+                candidates.append(candidate_all_column)
 
         if len(candidates) == 0:
-            logger.warning('[WARNING] Cannot find the focal method in the jacoco report. Need manual check\n', f'focal_method_name: {focal_method_name_param}\n\n')
+            logger.warning('[WARNING] Cannot find the focal method in the jacoco report. Need manual check\n' + f'focal_method_name: {focal_method_name_param}\n\n')
             cov_stat['raw_html'] = str(soup)
             return cov_stat        
 
@@ -296,7 +323,7 @@ class TestCaseRunner():
             branch_cov = all_column[4].text.strip()
             cov_stat['branch_coverage'] = float(branch_cov[:-1]) if branch_cov != 'n/a' else branch_cov
         else:
-            logger.warning('[WARNING] Cannot find the focal method in the jacoco report. Need manual check\n', f'focal_method_name: {focal_method_name_param}\n\n')
+            logger.warning('[WARNING] Cannot find the focal method in the jacoco report. Need manual check\n' + f'focal_method_name: {focal_method_name_param}\n\n')
             cov_stat['raw_html'] = str(soup)
 
         return cov_stat

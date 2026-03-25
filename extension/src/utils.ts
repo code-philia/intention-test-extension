@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { join as joinPath } from 'path';
+import path, { join as joinPath } from 'path';
 import * as vscode from 'vscode';
 
 type Input = vscode.TabInputText | vscode.TabInputTextDiff
@@ -83,4 +83,19 @@ export function getExtensionResource(context: vscode.ExtensionContext, relativeP
 export function getExtensionResourceText(context: vscode.ExtensionContext, relativePath: string): string {
     const resourcePath = getExtensionResource(context, relativePath);
     return readFileSync(resourcePath, 'utf8');
+}
+
+/* Webview Utils */
+export const offlineResourceUrlPattern = '(?!http:\\/\\/|https:\\/\\/)([^"]*\\.[^"]+)';
+
+export function resolveWebviewOfflineResourceUri(html: string, webview: vscode.Webview, resourceRoot: string, srcPattern: string = offlineResourceUrlPattern): string {
+    const cssFormattedHtml = html.replace(new RegExp(`(?<=href\="|src\=")${srcPattern}(?=")`, 'g'), (match, ...args) => {
+        if (match) {
+            const formattedCss = webview.asWebviewUri(vscode.Uri.file(path.join(resourceRoot, args[0])));
+            return formattedCss.toString();
+        }
+        return "";
+    });
+
+    return cssFormattedHtml;
 }

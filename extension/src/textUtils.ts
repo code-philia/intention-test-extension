@@ -13,18 +13,18 @@ export function isCodeQLPrompt(msg: string): boolean {
 }
 
 export function shouldGenTestPrompt(msg: string): boolean {
-    return isGenTestPrompt(msg) || isCodeQLPrompt(msg);
+    return msg.startsWith('# Target Focal Method');
 }
 
 export function extractRefTestCode(msg: string): string | undefined {
     // keep the last line break of code
-    const m = msg.match(/# Referable Test Case\n```(.*?)(?<=\n)```/s);
+    const m = msg.match(/# Referable Test Case\n```[a-z]*\n(.*?)(?<=\n)```/s);
     return m?.[1];
 }
 
 export function extractGenTestCode(msg: string): string | undefined {
     // keep the last line break of code
-    const m = msg.match(/```\n(.*?)(?<=\n)```/s);
+    const m = msg.match(/```[a-z]*\n(.*?)(?<=\n)```/s);
     if (m && !(m[1].trim().startsWith('# QUERY:'))) {
         return m[1];
     }

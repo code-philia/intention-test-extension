@@ -3,10 +3,12 @@ import os
 import pathlib
 
 class Configs:
-    def __init__(self, project_name, tester_path = '') -> None:
-        self.root_dir = pathlib.Path(os.path.abspath(os.path.dirname(__file__))).as_posix()
+    def __init__(self, project_name, project_root_dir, tester_path = '') -> None:
+        self.root_dir = os.path.abspath(os.path.dirname(__file__))
+        self.project_root_dir = project_root_dir
         self.openai_api_key = global_config['openai']['apikey']
         self.openai_url = global_config['openai']['url']
+        # TODO don't set globals here
         os.environ['OPEN_AI_KEY'] = self.openai_api_key
         os.environ['OPENAI_BASE_URL'] = self.openai_url
 
@@ -33,29 +35,12 @@ class Configs:
         # dataset relevant paths
         self.coverage_human_labeled_dir = f'{self.root_dir}/data/collected_coverages'
         self.test_desc_dataset_path = f'{self.root_dir}/data/test_desc_dataset/{project_name}.json'
-        self.fact_set_dir = f'{self.root_dir}/data/fact_set/{project_name}'
+        # self.fact_set_dir = f'{self.root_dir}/data/fact_set/{project_name}'
 
-        # project url used for system prompt
-        project_urls = {
-            "itext-java": 'https://github.com/itext/itext-java',
-            "hutool": 'https://github.com/chinabugotech/hutool',
-            "yavi": 'https://github.com/making/yavi',
-            "lambda": 'https://github.com/palatable/lambda',
-            "truth": 'https://github.com/google/truth',
-            "cron-utils": 'https://github.com/jmrozanec/cron-utils',
-            "imglib": 'https://github.com/nackily/imglib',
-            "ofdrw": 'https://github.com/ofdrw/ofdrw',
-            "RocketMQC": 'https://github.com/ProgrammerAnthony/RocketMQC',
-            "blade": 'https://github.com/lets-blade/blade',
-            "spark": 'https://github.com/perwendel/spark',
-            "awesome-algorithm": 'https://github.com/codeartx/awesome-algorithm',
-            "jInstagram": 'https://github.com/sachin-handiekar/jInstagram'
-        }
-        
-        self.project_url = project_urls.get(project_name)
-        if self.project_url is None:
-            raise ValueError(f"Unknown project name: {project_name}. Supported projects: {list(project_urls.keys())}")
-
+        # collected coverages
+        self.collected_coverages_json = f'{self.project_root_dir}/.intention-test/collected_coverages/{project_name}.json'
+        self.test_desc_json = f'{self.project_root_dir}/.intention-test/test_desc_dataset/{project_name}.json'
+        self.fact_set_dir = f'{self.project_root_dir}/.intention-test/fact_set/{project_name}'
 
     def is_corpus_prepared(self):
         return os.path.exists(self.corpus_path)
