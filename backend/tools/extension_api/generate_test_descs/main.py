@@ -116,7 +116,7 @@ def generate_test_descriptions(project_name: str, coverage_path: str, llm_name: 
     os.environ['OPEN_AI_KEY'] = global_config['openai']['apikey']
     os.environ['OPENAI_BASE_URL'] = global_config['openai']['url']
 
-    test_desc_agent = TestDescAgent(llm_name)
+    test_desc_agent = TestDescAgent(llm_name, project_name)
 
     save_path = Path(output_path) / f'{project_name}.json'
 

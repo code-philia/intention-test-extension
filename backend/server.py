@@ -9,9 +9,10 @@ import time
 import traceback
 import uuid
 from threading import Lock, RLock
-from typing import Dict, List, Optional, Union
 
-from flask import Flask, Response, jsonify, request, stream_with_context
+from flask import Flask, Request, Response, jsonify, request, stream_with_context
+from agents import LLMClient
+from chat_text_utils import construct_test_description_prompt
 from type import AbstractMessageSyncHandler
 from core import run_test_generation_chat
 import os
@@ -30,7 +31,7 @@ logging.basicConfig(
 )
 
 # Global dictionary to store active sessions with thread safety
-active_sessions: Dict[str, "ExtensionQuerySession"] = {}
+active_sessions: dict[str, "ExtensionQuerySession"] = {}
 sessions_lock = RLock()  # Reentrant lock for session access
 
 # Session cleanup tracking
@@ -111,7 +112,7 @@ def handle_unexpected_error(error):
     return jsonify(error="Internal server error"), 500
 
 
-def validate_request_data(data: Optional[dict], required_fields: List[str]) -> None:
+def validate_request_data(data: dict | None, required_fields: list[str]) -> None:
     """Validate request data has required fields."""
     if not data:
         raise APIError("Missing request body", 400)
@@ -150,7 +151,7 @@ app_config = AppConfig()
 
 
 class StatusMessage:
-    def __init__(self, status: str, message: Union[str, dict] = ""):
+    def __init__(self, status: str, message: str | dict = ""):
         self.status = status
         self.message = message
 
@@ -164,7 +165,7 @@ class ModelMessage:
     def __init__(self, data: dict):
         self.data = data
 
-    def response(self) -> dict:
+    def as_response(self) -> dict:
         return {"type": "msg", "data": self.data}
 
 
@@ -191,7 +192,7 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
         self.session_id = session_id
         self.raw_data = raw_data
         self.request = flask_request  # not used for writing responses anymore
-        self.messages = []
+        self.message_buffer = []
         self.messages_dict = {}
         self.messages_lock = Lock()  # Protect messages list
         self.junit_version = app_config.get_junit_version()
@@ -202,7 +203,7 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
         # Queue for receiving client responses
         self.client_responses = queue.Queue()
         self.awaiting_response = False
-        self.response_timeout = 120  # 120 seconds timeout for client responses
+        self.response_timeout = 12000  # 12000 seconds timeout for client responses
 
         self.query_data = self.prepare_query_arguments()
         self.session_running = False
@@ -267,15 +268,17 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
 
         self.last_activity = time.time()  # Update activity timestamp
 
-        msg_id_cnt = 0
         messages_copy = list(map(lambda msg: {**msg}, messages))
-        for msg in messages_copy:
-            msg_id_cnt += 1
-            msg["id"] = f"{self.session_id}_msg_{msg_id_cnt}"
-        data = {"session_id": self.session_id, "messages": messages_copy}
+
+        data = {"session_id": self.session_id, "messages": messages_copy}   # only updated message ids
         
         with self.messages_lock:
-            self.messages.append(ModelMessage(data).response())
+            self.message_buffer.append(ModelMessage(data).as_response())
+
+    def send_delta_message(self, message: dict[str, str]):
+        data = {"session_id": self.session_id, "delta_message": message}
+
+        self.message_buffer.append(ModelMessage(data).as_response())
 
     def write_start_message(self):
         self.last_activity = time.time()
@@ -287,7 +290,7 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
         }
         message = {"type": "status", "data": data}
         with self.messages_lock:
-            self.messages.append(message)
+            self.message_buffer.append(message)
 
     def write_noref_message(self):
         self.last_activity = time.time()
@@ -299,7 +302,7 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
         }
         message = {"type": "noreference", "data": data}
         with self.messages_lock:
-            self.messages.append(message)
+            self.message_buffer.append(message)
 
     def write_finish_message(self):
         self.last_activity = time.time()
@@ -311,7 +314,7 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
         }
         message = {"type": "status", "data": data}
         with self.messages_lock:
-            self.messages.append(message)
+            self.message_buffer.append(message)
 
     def write_error_message(self, error_msg: str):
         """Write an error message to the session."""
@@ -325,7 +328,7 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
         }
         message = {"type": "status", "data": data}
         with self.messages_lock:
-            self.messages.append(message)
+            self.message_buffer.append(message)
 
     def request_client_response(
         self, prompt: str, response_type: str = "text", options: list[str] | None = None
@@ -359,7 +362,7 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
         request_message = {"type": "client_request", "data": request_data}
 
         with self.messages_lock:
-            self.messages.append(request_message)
+            self.message_buffer.append(request_message)
         
         self.awaiting_response = True
 
@@ -411,21 +414,21 @@ class ExtensionQuerySession(AbstractMessageSyncHandler):
 def event_stream(session: ExtensionQuerySession):
     last_index = 0
     # Continue streaming until session is finished and all messages have been sent
-    while not session.finished or (isinstance(session.messages, list) and last_index < len(session.messages)):
+    while not session.finished or (isinstance(session.message_buffer, list) and last_index < len(session.message_buffer)):
         with session.messages_lock:
             messages_to_send = []
             
-            if isinstance(session.messages, list):
-                current_message_count = len(session.messages)
+            if isinstance(session.message_buffer, list):
+                current_message_count = len(session.message_buffer)
                 while last_index < current_message_count:
-                    message = session.messages[last_index]
+                    message = session.message_buffer[last_index]
                     messages_to_send.append(message)
                     if not ("streaming" in message and message["streaming"] == True):
                         last_index += 1
                     else:
                         break  # Don't increment for streaming messages
             else:
-                messages_to_send.append(session.messages)
+                messages_to_send.append(session.message_buffer)
         
         # Send messages outside the lock
         for message in messages_to_send:
@@ -437,32 +440,11 @@ def event_stream(session: ExtensionQuerySession):
 
 # Updated assign_to_session to work with Flask's request
 
-
-def assign_to_session(query_text: str, flask_request) -> Optional[ExtensionQuerySession]:
-    try:
-        query_data = json.loads(query_text)
-        if query_data["type"] != "query":
-            raise ValueError('Request type must be "query"')
-
-        # Generate secure session ID using UUID
-        session_id = str(uuid.uuid4())
-        new_session = ExtensionQuerySession(session_id, query_data["data"], flask_request)
-        return new_session
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.error("Error creating session: %s", e)
-        return None
-
-
-# Flask route for handling /session POST requests
-
-
-@app.route("/session", methods=["POST"])
-def session_route():
-    # Validate request
-    if not request.data:
+def validate_and_extract_query_data(req: Request) -> dict:
+    if not req.data:
         raise APIError("Empty request body", 400)
 
-    query_text = request.get_data(as_text=True)
+    query_text = req.get_data(as_text=True)
     if not query_text.strip():
         raise APIError("Empty query text", 400)
 
@@ -477,8 +459,29 @@ def session_route():
 
     if "data" not in query_data:
         raise APIError("Missing 'data' field in request", 400)
+    
+    query_text = req.get_data(as_text=True)
+    query_data = json.loads(query_text)
+    return query_data
 
-    query_session = assign_to_session(query_text, request)
+def assign_to_session(req: Request) -> ExtensionQuerySession | None:
+    try:
+        query_data = validate_and_extract_query_data(req)
+        # Generate secure session ID using UUID
+        session_id = str(uuid.uuid4())
+        new_session = ExtensionQuerySession(session_id, query_data["data"], req)
+        return new_session
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.error("Error creating session: %s", e)
+        return None
+
+
+# Flask route for handling /session POST requests
+
+
+@app.route("/session", methods=["POST"])
+def session_route():
+    query_session = assign_to_session(request)
     if query_session is None:
         raise APIError("Failed to create query session", 500)
 
@@ -546,11 +549,14 @@ def client_response_route():
 @app.route('/generate_data', methods=['POST'])
 def generate_data():
     data = request.json
+    if data is None:
+        raise APIError('No JSON data contained in request', 400)
+
     project_path = data.get('project_path')
     use_jacoco = data.get('use_jacoco', False)
     test_suffix = data.get('test_suffix', 'Test')
     if not project_path:
-        return jsonify({'error': 'project_path is required'}), 400
+        raise APIError('project_path is required', 400)
     
     project_name = os.path.basename(project_path)
     workspace_dir = project_path 
@@ -572,7 +578,7 @@ def generate_data():
     except Exception as e:
         logger.error(f"Error in collect_pairs: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        raise APIError(str(e), 500) from e
         
     # 2. Generate Test Descriptions
     coverage_file = os.path.join(collected_coverages_dir, f'{project_name}.json')
@@ -587,9 +593,33 @@ def generate_data():
     except Exception as e:
         logger.error(f"Error in generate_test_descriptions: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        raise APIError(str(e), 500) from e
         
     return jsonify({'status': 'success'})
+
+@app.route('/suggest_desc', methods=['POST'])
+def suggest_test_description():
+    # validate
+    data = request.json
+
+    if not isinstance(data, dict):
+        raise APIError('Data should be a JSON object', 400)
+    
+    focal_method = data.get('focal_method')
+    if not isinstance(focal_method, str):
+        focal_method = 'No focal method provided. Guess a random one.'
+
+    simple_desc = data.get('simple_desc')
+    if not isinstance(simple_desc, str):
+        simple_desc = 'No simple description provided. Guess a random one.'
+
+    test_description_prompt = construct_test_description_prompt('// to be generated', focal_method)
+    prompt = f'''The user's test intention is:\n{simple_desc}\n\nPlease provide a more detailed test description according to this instruction:\n\n{test_description_prompt}'''
+    client = LLMClient('gpt-4o', 'You are an experienced SDE.')
+    suggestion = client.get_response([{'role': 'user', 'content': prompt}])
+
+    result = {'suggested_desc': suggestion}
+    return jsonify(result)
 
 
 # Removed the old start_http_server function

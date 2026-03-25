@@ -423,13 +423,11 @@ class LanguageServer:
         messages, self.messages = self.messages, []  # Return and clear message list
         return messages
     
-    def _send_to_process(self, message: str):
-        if os.name == "nt": # Windows
-            # TODO: Just a speculation, not verified.
-            self.process.stdin.write(f"Content-Length: {len(message)}\n\n{message}")
-        elif os.name == "posix": # Linux, macOS
-            self.process.stdin.write(f"Content-Length: {len(message)}\r\n\r\n{message}")
-        self.process.stdin.flush()
+    def _send_to_process(self, message: str) -> None:
+        body = message.encode("utf-8")
+        header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+        self.process.stdin.buffer.write(header + body)
+        self.process.stdin.buffer.flush()
         
     def _create_message(self, method: str, params: dict = None, is_request: bool = True) -> str:
         message_data = {

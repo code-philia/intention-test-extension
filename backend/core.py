@@ -10,6 +10,9 @@ from configs import Configs
 from dataset import Dataset
 from generator import IntentionTester
 
+base = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(base / 'tools/extension_api/collect_facts'))
+
 logger = logging.getLogger(__name__)
 
 logger.warning(
@@ -118,6 +121,26 @@ def find_fact_data_by_method_name(offline_fact_data, focal_method_name):
     return None
 
 
+def _select_path_class(path: str):
+    if ":" in path[:3] or "\\" in path:
+        return pathlib.PureWindowsPath
+    return pathlib.PurePosixPath
+
+def split_project_path(full_path: str, project_name: str):
+    PathCls = _select_path_class(full_path)
+    p = PathCls(full_path)
+    parts = p.parts
+
+    try:
+        idx = next(i for i, part in enumerate(parts) if part.lower() == project_name.lower())
+    except StopIteration as e:
+        raise ValueError(f"project name {project_name!r} not found in path") from e
+
+    project_path = PathCls(*parts[:idx + 1])
+    relative_path = PathCls(*parts[idx + 1:])
+    return str(project_path), str(relative_path)
+
+
 def run_test_generation_chat(
     target_focal_method: str,
     target_focal_file: str,
@@ -142,7 +165,7 @@ def run_test_generation_chat(
         lambda s: s[0].upper(),
         pathlib.Path(__file__).parent.absolute().as_posix(),
     )
-    configs = Configs(project_name, tester_path)
+    configs = Configs(project_name, project_path, tester_path)
 
     class_name = os.path.splitext(os.path.basename(focal_file_path))[0]
     focal_method_name = f"{class_name}::::"
@@ -164,7 +187,7 @@ def run_test_generation_chat(
 
     without_test_focal_file_path = (
         pathlib.Path(project_without_test_file_dir)
-        / focal_file_path[focal_file_path.index(project_name) :]
+        / split_project_path(focal_file_path, project_name)[1]
     ).as_posix()
     target_test_case_path = without_test_focal_file_path.replace(
         "src/main/java", "src/test/java"
@@ -186,13 +209,16 @@ def run_test_generation_chat(
         )
 
         # Import the fact collection function
-        from standalone.collect_fact_offline_standalone import collect_facts
+        from tools.extension_api.collect_facts.main import collect_facts
 
         # Collect facts with default parameters
-        collected_facts, save_path = collect_facts(
-            project_name=configs.project_name, project_path=project_path
+        collect_facts(
+            project_path,
+            configs.collected_coverages_json,
+            configs.test_desc_json,
+            configs.fact_set_dir,
+            project_name=project_name
         )
-        logger.info("Fact collection completed. Saved to: %s", save_path)
     else:
         logger.info("Fact reference data found at %s", fact_ref_data_path)
 
@@ -215,14 +241,23 @@ def run_test_generation_chat(
             "No matching fact data found for focal method:\n%s", focal_method_name
         )
 
-    ref_scores, ref_focal_methods, ref_test_cases = retrieve_reference_offline_by_name(
-        offline_fact_ref_data, focal_method_name, top_k=3
+    # 1. ref test case
+
+    ref_score, ref_focal_method, ref_test_case = retrieve_reference_offline_by_name(
+        offline_fact_ref_data, focal_method_name
     )
+    references_tc_rag = [ref_test_case]
+
+    if len(references_tc_rag) > 0:
+        top_1_reference_tc_rag = references_tc_rag[0]
+    else:
+        top_1_reference_tc_rag = None
 
     if isinstance(top_1_reference_tc_rag, list):
         top_1_reference_tc_rag = "\n".join(top_1_reference_tc_rag)
 
-    # # collect facts
+    # 2. facts
+
     facts, facts_sim, usages, usages_sim = get_crucial_facts_offline_by_name(
         offline_fact_ref_data, focal_method_name
     )
@@ -235,11 +270,9 @@ def run_test_generation_chat(
             target_context=target_focal_file,
             target_test_case_desc=target_test_case_desc,
             target_test_case_path=target_test_case_path,
-            referable_test_cases=ref_test_cases,
+            referable_test_case=top_1_reference_tc_rag,
             facts=facts,
-            junit_version=str(query_session.junit_version)
-            if query_session is not None
-            else "5",
+            junit_version=str(query_session.junit_version) if query_session is not None else "5",
         )
     )
 

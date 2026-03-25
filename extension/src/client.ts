@@ -1,4 +1,5 @@
 // create a python subprocess and communicate with it through network
+import axios from 'axios';
 import { request, RequestOptions } from 'http';
 
 export class TesterSession {
@@ -11,7 +12,8 @@ export class TesterSession {
     
     // setting connectToPort to 0 to start up an internal server
     constructor(
-        updateMessageCallback?: (...args: any[]) => any, 
+        updateMessageCallback?: (...args: any[]) => any,
+        updateWithDeltaMessage?: (...args: any[]) => any,
         errorCallback?: (...args: any[]) => any, 
         showNoRefMsg?: (...args: any[]) => any, 
         connectToPort: number = 0,
@@ -304,6 +306,8 @@ export class TesterSession {
                     if (this.updateMessageCallback) {
                         this.updateMessageCallback(msg.data.messages);
                     }
+                } else if (msg.data.session_id && msg.data.delta_message) {
+                    
                 }
                 break;
 
@@ -337,4 +341,13 @@ export class TesterSession {
         this.currentSessionId = undefined;
         // Note: HTTP streaming connections are closed by the server when session ends
     }
+}
+
+export async function requestDetailedDescription(port: number, focalMethod: string, shortDescription: string) {
+    const res = await axios.post(`http://localhost:${port}/suggest_desc`, {
+        focal_method: focalMethod,
+        simple_desc: shortDescription
+    });
+
+    return res.data.suggested_desc;
 }

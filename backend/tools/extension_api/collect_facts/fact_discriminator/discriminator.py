@@ -82,7 +82,7 @@ class FactDiscriminator:
 
                 for j, each_usage in enumerate(focal_method_usages):
                     if (candidate_class, candidate_signature) in each_usage[1]:
-                        occurrence_count[i][j] = 1
+                        occurrence_count[i][j] = 1  # FIXME not counting multiple calls in one usage
 
             # calculate the score
             for i, each_candidate in enumerate(candidate_facts):

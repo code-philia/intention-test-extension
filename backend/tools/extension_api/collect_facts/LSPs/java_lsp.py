@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from LSPs.language_server import LanguageServer
@@ -6,13 +7,15 @@ from LSPs.language_server import LanguageServer
 class JavaLanguageServer(LanguageServer):
     def __init__(self, workspace_path: str, log: bool = False):
         language_id = "java"
-        java_commond = "/usr/lib/jvm/java-17-openjdk-amd64/bin/java"
+        java_command = shutil.which("java")
+        if not java_command:
+            raise FileNotFoundError("java command not found on PATH")
         current_path = os.path.dirname(os.path.abspath(__file__))
         jdt_lsp_jar = os.path.join(current_path, "jdt-language-server/plugins/org.eclipse.equinox.launcher_1.6.900.v20240613-2009.jar")
         jdt_lsp_config = os.path.join(current_path, "jdt-language-server/config_linux")
-        
+
         COMMAND = [
-            java_commond,
+            java_command,
             "-Declipse.application=org.eclipse.jdt.ls.core.id1",
             "-Dosgi.bundles.defaultStartLevel=4",
             "-Declipse.product=org.eclipse.jdt.ls.core.product",

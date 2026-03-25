@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import shutil
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 import subprocess
@@ -15,6 +16,32 @@ logger = logging.getLogger(__name__)
 # }
 # env_vars = os.environ.copy()
 # env_vars.update(JAVA_ENVS)
+
+
+def run_maven_command(
+    mvn_args: list[str],
+    cwd_path: str,
+    encoding: str = 'utf-8',
+) -> tuple[str, int]:
+    mvn_exe = shutil.which('mvn.cmd') or shutil.which('mvn')
+    if not mvn_exe:
+        raise FileNotFoundError('Maven not found in PATH. Install Maven or add it to PATH.')
+
+    result = subprocess.run(
+        [mvn_exe, *mvn_args],
+        cwd=cwd_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        check=False,
+        text=False,
+    )
+
+    stdout_text = result.stdout.decode(encoding, errors='replace')
+    stderr_text = result.stderr.decode(encoding, errors='replace')
+    log = f'{stdout_text}\n\n{stderr_text}'
+    return log, result.returncode
+
 
 class Buffer:
     def __init__(self):
@@ -159,19 +186,22 @@ class TestCaseRunner():
         test_case_relative_path = self.get_test_case_relative_path(test_case_path)
 
         cwd_path = test_case_path.split('/src/test/')[0]
-        mvn_compile_cmd = ['mvn', 'clean', f'-Dtest={test_case_relative_path}', 'test-compile', '-Dcheckstyle.skip=true']
-        compile_result = subprocess.run(mvn_compile_cmd, cwd=cwd_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, universal_newlines=True, check=False)
-        compile_log = f'{compile_result.stdout}\n\n{compile_result.stderr}\n\n'
+        compile_log, _ = run_maven_command(
+            ['clean', f'-Dtest={test_case_relative_path}', 'test-compile', '-Dcheckstyle.skip=true'],
+            cwd_path,
+        )
 
         if "BUILD SUCCESS" in compile_log:
             compile_success = True
 
-            mvn_test_cmd = ['mvn', 'clean', 'verify', f'-Dtest={test_case_relative_path}', '-Dcheckstyle.skip=true']  # test and get the coverage
-            test_result = subprocess.run(mvn_test_cmd, cwd=cwd_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, universal_newlines=True, check=False)
-            test_log = f'{test_result.stdout}\n\n{test_result.stderr}'
+            test_log, _ = run_maven_command(
+                ['clean', 'verify', f'-Dtest={test_case_relative_path}', '-Dcheckstyle.skip=true'],
+                cwd_path,
+            )
+
             if "BUILD SUCCESS" in test_log:
                 execute_success = True
-        
+
         return compile_log, test_log, compile_success, execute_success
 
     def get_test_case_relative_path(self, test_case_path):

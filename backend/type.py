@@ -9,6 +9,10 @@ class AbstractMessageSyncHandler:
         pass
 
     @abstractmethod
+    def send_delta_message(self, message: dict[str, str]):
+        pass
+
+    @abstractmethod
     def request_client_response(
         self, prompt: str, response_type: str = "text", options: list[str] | None = None
     ) -> str | None:

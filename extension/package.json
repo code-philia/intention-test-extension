@@ -31,6 +31,11 @@
         "title": "Change JUnit Version"
       },
       {
+        "command": "intentionTest.showDebugEditorWebview",
+        "category": "IntentionTest",
+        "title": "Show Debug Editor Webview"
+      },
+      {
         "command": "intentionTest.generateCoverageAndDescription",
         "category": "IntentionTest",
         "title": "Generate Coverages and Test Descriptions"
@@ -104,6 +109,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
+    "axios": "^1.13.2",
     "marked": "^14.0.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-java": "^0.21.0",

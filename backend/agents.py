@@ -6,24 +6,29 @@ import logging
 from openai import OpenAI
 from dataclasses import dataclass, field
 
+from exp_feature import create_unlearning_prompt
+from chat_text_utils import construct_test_description_prompt, create_general_tester_prompt, create_test_description_polish_prompt, create_test_generation_instruction, create_test_refinement_instruction, extract_code_from_response
+
+from user_config import global_config
+
 logger = logging.getLogger(__name__)
 
 
-class Agent:
-    def __init__(self, llm_name: str):
-        self.system_prompt = None
+class LLMClient:
+    def __init__(self, llm_name: str, system_prompt = None):
         self.model_name = llm_name
+        self.system_prompt = system_prompt
 
         self.client = OpenAI(
-            api_key=os.environ.get('OPEN_AI_KEY'), 
-            base_url=os.environ.get('OPENAI_BASE_URL')
+            api_key=global_config['openai']['apikey'],
+            base_url=global_config['openai']['url']
             )
-        self.temp = 0.0  # for GPT-4o. For DeepSeek-R1-Distill-Qwen-7B, the temperature is fixed to 0.5
+        self.temp = 0.3  # for GPT-4o. For DeepSeek-R1-Distill-Qwen-7B, the temperature is fixed to 0.5
         self.top_p = 0.1
         self.seed = 1203
         self.max_completion_tokens = 5120
 
-    def get_response(self, messages, n=1, skip_deepseek_think: bool=False, stream_callback=None) -> list[str]:
+    def get_response(self, messages, n=1, skip_deepseek_think: bool=False, stream_callback=None) -> list[str] | str:
         if self.model_name in ('gpt-4o', 'gpt-3.5-turbo'):
             if self.system_prompt:
                 messages = [{'role': 'system', 'content': self.system_prompt}] + messages
@@ -75,29 +80,30 @@ class Agent:
                     collected_content = ""
                     # Create the assistant message that will be updated
                     assistant_message = {"role": "assistant", "content": ""}
-                    updated_messages = messages + [assistant_message]
                     
+                    stream_callback({'type': 'start_streaming'})
+
                     for chunk in stream:
                         if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content is not None:
                             delta_content = chunk.choices[0].delta.content
                             collected_content += delta_content
-                            # Update the assistant message content
-                            assistant_message["content"] = collected_content
                             # Call the update callback with the updated messages
-                            stream_callback(updated_messages)
+                            stream_callback({'type': 'content_delta', 'delta': delta_content})
                             logger.debug(f'Streaming update: {collected_content[-50:]}')
+
+                    stream_callback({'type': 'finish_streaming', 'total': collected_content})
                     
+                    assistant_message["content"] = collected_content
                     each_response = StreamResponse(choices=[StreamChoice(message=StreamMessage(content=collected_content))])
                 else:
                     each_response = self.client.chat.completions.create(
-                        model=self.model_name,
+                        model="openai/o4-mini",
                         messages=messages,
-                        temperature=self.temp,
-                        top_p=self.top_p,
-                        seed=self.seed,
+                        temperature=1.0,
+                        top_p=1.0,
                         stream=False,
                         max_completion_tokens=self.max_completion_tokens,
-                        n=n,
+                        n=1,
                     )
             except Exception as e:
                 logger.error(f'Error calling {self.model_name} API: {e}')
@@ -112,7 +118,8 @@ class Agent:
             
             logger.info(f'Generation completed in {time.time()-s_time:.2f} seconds')
 
-            response.append(each_response.choices[0].message.content)
+            # response.append(each_response.choices[0].message.content)
+            response.extend([choice.message.content for choice in each_response.choices])
 
         if n == 1:
             response = response[0]
@@ -243,20 +250,6 @@ class Agent:
             return None
         answer = response.split('</think>')[-1].strip()
         return answer
-    
-    def extract_code_from_response(self, response: str):
-        code = re.findall(r'```java(.*)```', response, re.DOTALL)
-        if len(code) == 0:
-            code = re.findall(r'```(.*)```', response, re.DOTALL)
-            if len(code) == 0:
-                print(f"[Warning] The response does not contain any code: {response}")
-                return " "  # TODO: refine this process
-                
-        if len(code) > 1:
-            print(f'WARNING: The response contains multiple code blocks:\n{response}\n\n')
-
-        code = code[0].strip()
-        return code
 
     def add_line_numbers(self, content):
         lines = content.split('\n')
@@ -275,16 +268,30 @@ class Agent:
         marker_index = line.find(':')
         return line[marker_index+1:]
 
+class Agent:
+    def __init__(self, llm_name: str, project_name: str, n_responses: int=1, skip_deepseek_think: bool=False, enable_experimental_unlearning: bool=False):
+        self.n_responses = n_responses
+        self.skip_deepseek_think = skip_deepseek_think
+        self.gen_prefix = '```package '
+        self.gen_suffix = '```'
+
+        self.system_prompt = ''
+        if enable_experimental_unlearning:
+            self.system_prompt += create_unlearning_prompt(project_name)
+        self.system_prompt += create_general_tester_prompt()
+        self.system_prompt = self.system_prompt.strip()
+
+        self.llm_client = LLMClient(llm_name, self.system_prompt)
 
 class TestDescAgent(Agent):
     def generate_test_desc(self, test_case, focal_method):
-        prompt = self.construct_prompt(test_case, focal_method)
+        prompt = construct_test_description_prompt(test_case, focal_method)
         messages = [{'role': 'user', 'content': prompt}]
 
         is_success = False
         response = ''
         for _ in range(3):
-            response = self.get_response(messages)
+            response = self.llm_client.get_response(messages)
             is_success = self.check_generation(response)
             if is_success:
                 break
@@ -295,19 +302,13 @@ class TestDescAgent(Agent):
 
         return response
 
-    def construct_prompt(self, test_case, focal_method):
-        instruction = f"""# Test Case\n```\n{test_case}\n```\n\n# Focal Method\n```\n{focal_method}\n```\n\n# Objective\n// Identifies and briefly describes the special focus or objective of #Test Case#. \n\n# Preconditions\n// Describes the required state of the test environment and test data and any special constraints pertaining to the execution of #Test Case#. Also, specifies each action required to bring the test item into a state where the expected result can be compared to the actual results. The level of detail provided by the descriptions should be tailored to fit the knowledge of the test executors.\n\n# Expected Results\n// Specifies the expected outputs and behavior required of the test item in response to the inputs that are given to the test item when it is in its precondition state. Provides the expected values (with tolerances where appropriate) for each required output.\n\n# Instruction\nPlease generate the #Objective#, #Preconditions#, and #Expected Results# of #Test Case#.\nEnsure that the output follows the expected format:\n```\n# Objective\n...\n\n# Preconditions\n1. ...\n2. ...\n...\n\n# Expected Results\n1. ...\n2. ...\n...\n```\n\n# Requirements\n1. The length of #Objective# must be less than fifty words.\n2. The total length of #Preconditions# and #Expected Results# must be less than two hundred words.\n3. The program elements in #Objective#, #Preconditions#, and #Expected Results# must be enclosed by a pair of backticks, such as `ClassA` and `methodInov()`.\n4. Ensure the #Objective#, #Preconditions#, and #Expected Results# are written in a natural, human-like manner. MUST avoid containing many program elements; instead, use clear and natural language."""
-
-        return instruction
-
     def polish_test_desc(self, test_desc):
-        prompt = f"""# Test Case Description\n```\n{test_desc}\n```\n\n# Instruction\nRewrite the #Test Case Description# to make it more natural and human-like by translating the program elements (enclosed by `) to natural language description.\nFor example:\n1. Split the camel words and then transform them from program elements to natural language descriptions (such as `IpAddress` -> ip address).\n2. Using natural language to describe invocation (such as `Obj.getPrefix(Param)` -> get the prefix of Param, and `program.version=0.1` -> version of program is 0.1).\n\nAdditionally, ensure that the output follows the expected format:\n```\n# Objective\n...\n\n# Preconditions\n1. ...\n2. ...\n...\n\n# Expected Results\n1. ...\n2. ...\n...\n```\n\n# Requirements\n1. The length of #Objective# must be less than fifty words.\n2. The total length of #Preconditions# and #Expected Results# must be less than two hundred words."""
-
+        prompt = create_test_description_polish_prompt(test_desc)
         messages = [{'role': 'user', 'content': prompt}]
 
         new_test_desc = test_desc
         for _ in range(2):
-            response = self.get_response(messages)
+            response = self.llm_client.get_response(messages)
             is_success = self.check_generation(response)
             if is_success:
                 new_test_desc = response
@@ -324,122 +325,49 @@ class TestDescAgent(Agent):
             return False
 
 class TestGenAgent(Agent):
-    def __init__(self, llm_name: str, project_name: str, project_url: str | None, n_responses: int=1, skip_deepseek_think: bool=False):
-        super(TestGenAgent, self).__init__(llm_name)
-        self.n_responses = n_responses
-        self.skip_deepseek_think = skip_deepseek_think
-        self.gen_prefix = '```package '
-        self.gen_suffix = '```'
-        self.system_prompt = f"""You may have memorized information from the GitHub repository '{project_name}' (URL is {project_url}). For this task, you must not use any of that memorized information in your responses. Instead, base your answers exclusively on the context I provide in the document. If your response would otherwise rely on memorized '{project_name}' data, replace that content with generic or random information unrelated to '{project_name}'."""
-
-    def generate_test_case(self, target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test: str, facts: list[str], junit_version: str, forbid_using_facts: bool=False, stream_callback=None):
-        prompt = self.construct_prompt(target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test, facts, junit_version, forbid_using_facts)
+    def generate_test_case(self, target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test: str, facts: list[str], junit_version: str, forbid_using_facts: bool=False, stream_callback=None, append_chat_message_callback=None):
+        prompt = create_test_generation_instruction(target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test, facts, junit_version, forbid_using_facts)
         messages = [{'role': 'user', 'content': prompt}]
-
-        raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think, stream_callback=stream_callback)
+        if append_chat_message_callback is not None:
+            append_chat_message_callback(messages[-1])
+            
+        raw_response = self.llm_client.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think, stream_callback=stream_callback)
         if isinstance(raw_response, list):
             raw_response = raw_response[0]
+
         messages.append({"role": "assistant", "content": raw_response})
+        if append_chat_message_callback is not None:
+            append_chat_message_callback(messages[-1])
         
-        generated_tc = self.extract_code_from_response(raw_response)
+        generated_tc = extract_code_from_response(raw_response)
         return generated_tc, prompt, messages
 
-    def generate_finish(self):
+    def generate_finish(self, previous_messages):
         prompt = "The Target Test Case has been successfully compiled and executed.\nPlease check whether its test method executes the Target Focal Method and aligns with the intention.\n- If so, output only \"FINISH GENERATION\",\n- Otherwise, please output only the analysis."
-        messages = [{'role': 'user', 'content': prompt}]
+        messages = [*previous_messages, {'role': 'user', 'content': prompt}]
 
-        raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think)
+        raw_response = self.llm_client.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think)
         if isinstance(raw_response, list):
             raw_response = raw_response[0]
         messages.append({"role": "assistant", "content": raw_response})
 
         return messages
 
-    def construct_prompt(self, target_focal_method, target_context, target_test_class_name, target_test_desc, referable_test: str, facts: list, junit_version: str, forbid_using_facts: bool=False):
-        instruction = f"""# Target Focal Method\n```\n{target_focal_method}\n```\n\n# Target Focal Method Context\nThe Target Focal Method belongs to the following class (with some details omitted):\n```\n{target_context}\n```\n\n# Target Test Case\n// A JUnit {junit_version} test case to be generated, whose class name is {target_test_class_name}.\n\n# Target Test Case Description\n```\n{target_test_desc}\n```\n\n"""
-
-        if referable_test:
-            instruction += f"""# Referable Test Case\n```\n{referable_test}\n```\n\n"""
-        
-        if facts:
-            facts_str = '\n\n'.join([f'## Fact {i+1}:\n{each}' for i, each in enumerate(facts)])
-            if forbid_using_facts:
-                facts_str = facts_str.replace('## Fact ', '## API ')
-                instruction += f"""# Prohibited APIs\nMUST NOT include the following APIs in the generated #Target Test Case#\n```\n{facts_str}\n```\n\n"""
-            else:
-                instruction += f"""# Relevant Project Information\n```\n{facts_str}\n```\n\n"""
-
-        instruction += """# Instruction\nPlease generate ONE #Target Test Case# for #Target Focal Method# by strictly following #Target Test Case Description#"""
-        
-        if referable_test or (facts and not forbid_using_facts):
-            instruction += """ and referring to """
-
-        if referable_test:
-            instruction += """#Referable Test Case#"""
-
-        if facts:
-            instruction = instruction + " and " if referable_test else instruction
-            if forbid_using_facts:
-                instruction += """#Prohibited APIs#.\nNOTE: #Prohibited APIs# contains the APIs that MUST NOT be included in your generated #Target Test Case#.\n\n"""
-            else:
-                instruction += """#Relevant Project Information#.\nNOTE: #Relevant Project Information# contains key facts about the project. These facts MUST be FULLY reflected in your generated #Target Test Case#.\n\n"""
-            
-        else:
-            instruction += ".\n\n"
-        
-        instruction += f"""# Output Requirements\nYour final output must contain only ONE test method annotated `@Test` and strictly adhere to the following format:\n1: Begin with the exact prefix: "{self.gen_prefix}".\n2: End with the exact suffix: "{self.gen_suffix}".\nEnsure that no additional text appears before the prefix or after the suffix."""
-
-        return instruction
-
-
 class TestRefineAgent(Agent):
-    def __init__(self, llm_name: str, project_name: str, project_url: str | None, n_responses, skip_deepseek_think: bool=False):
-        super().__init__(llm_name)
-        self.n_responses = n_responses
-        self.skip_deepseek_think = skip_deepseek_think
-        self.gen_prefix = '```package '
-        self.gen_suffix = '```'
-        self.system_prompt = f"""You may have memorized information from the GitHub repository '{project_name}' (URL is {project_url}). For this task, you must not use any of that memorized information in your responses. Instead, base your answers exclusively on the context I provide in the document. If your response would otherwise rely on memorized '{project_name}' data, replace that content with generic or random information unrelated to '{project_name}'."""
-    
-    def refine(self, gen_test_case, error_msg, target_focal_method, target_context, target_test_case_desc, facts: list, forbid_using_facts: bool=False, stream_callback=None):
-        prompt = self.construct_prompt(gen_test_case, error_msg, target_focal_method, target_context, target_test_case_desc, facts, forbid_using_facts)
+    def refine(self, gen_test_case, error_msg, target_focal_method, target_context, target_test_case_desc, facts: list, forbid_using_facts: bool=False, stream_callback=None, append_chat_message_callback=None):
+        prompt = create_test_refinement_instruction(gen_test_case, error_msg, target_focal_method, target_context, target_test_case_desc, facts, forbid_using_facts)
         messages = [{'role': 'user', 'content': prompt}]
+        if append_chat_message_callback is not None:
+            append_chat_message_callback(messages[-1])
 
-        raw_response = self.get_response(messages, n=self.n_responses, skip_deepseek_think=self.skip_deepseek_think, stream_callback=stream_callback)
-        if isinstance(raw_response, list):
-            raw_response = raw_response[0]
+        raw_response = self.llm_client.get_response(messages, n=3, skip_deepseek_think=self.skip_deepseek_think, stream_callback=None)
+        # if isinstance(raw_response, list):
+        #     raw_response = raw_response[0]
 
-        generated_tc = self.extract_code_from_response(raw_response)
+        generated_tc = list(map(extract_code_from_response, raw_response))
 
-        messages.append({"role": "assistant", "content": raw_response})
+        messages.append({"role": "assistant", "content": raw_response[0]})
         return generated_tc, prompt, messages
-
-    def construct_prompt(self, gen_test_case, error_msg, target_focal_method, target_context, target_test_desc, facts: list, forbid_using_facts: bool=False):
-        instruction = f"""# Target Focal Method\n```\n{target_focal_method}\n```\n\n# Target Focal Method Context\nThe Target Focal Method belongs to the following class (with some details omitted):\n```\n{target_context}\n```\n\n# Target Test Case Description\n```\n{target_test_desc}\n```\n\n"""
-        
-        if facts:
-            facts_str = '\n\n'.join([f'## Fact {i+1}:\n{each}' for i, each in enumerate(facts)])
-            if forbid_using_facts:
-                facts_str = facts_str.replace('## Fact ', '## API ')
-                instruction += f"""# Prohibited APIs\nMUST NOT include the following APIs in the generated #Target Test Case#\n```\n{facts_str}\n```\n\n"""
-            else:
-                instruction += f"""# Relevant Project Information\n```\n{facts_str}\n```\n\n"""
-
-        instruction += f"""# Generated Target Test Case\n```\n{gen_test_case}\n```\n\n# Error Message\nWhen compiling and executing #Generated Target Test Case#, encounter the following errors:\n```\n{error_msg}\n```\n\n"""
-
-        instruction += """# Instruction\nPlease modify #Generated Target Test Case# to resolve the errors shown in #Error Message#. """
-        
-        if facts:
-            if forbid_using_facts:
-                instruction += """NOTE: #Prohibited APIs# contains the APIs that MUST NOT be included in your generated #Target Test Case#.\n\n"""
-            else:
-                instruction += """#Relevant Project Information# provides some key facts in the project that MUST be considered to resolve the errors.\n\n"""
-        else:
-            instruction += "\n\n"
-        
-        instruction += f"""# Output Requirements\nYour final output must strictly adhere to the following format:\n1: Begin with the exact prefix: "{self.gen_prefix}".\n2: End with the exact suffix: "{self.gen_suffix}".\nEnsure that no additional text appears before the prefix or after the suffix."""
-
-        return instruction
 
 @dataclass
 class StreamMessage:

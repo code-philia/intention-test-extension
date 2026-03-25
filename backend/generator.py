@@ -1,4 +1,5 @@
 import re
+import os
 import logging
 logger = logging.getLogger(__name__)
 
@@ -7,7 +8,7 @@ from type import AbstractMessageSyncHandler
 from configs import Configs
 from test_case_runner import TestCaseRunner
 
-
+# NOTE only this layer knows the id of each message
 class IntentionTester:
     def __init__(
         self, configs: Configs, max_round=3, skip_deepseek_think: bool = False
@@ -19,14 +20,12 @@ class IntentionTester:
         self.test_gen_agent = TestGenAgent(
             configs.llm_name,
             configs.project_name,
-            configs.project_url,
             n_responses=1,
             skip_deepseek_think=skip_deepseek_think,
         )
         self.test_refine_agent = TestRefineAgent(
             configs.llm_name,
             configs.project_name,
-            configs.project_url,
             n_responses=1,
             skip_deepseek_think=skip_deepseek_think,
         )
@@ -44,6 +43,7 @@ class IntentionTester:
         Append a message to the internal message list.
         Optionally update the remote client via query session.
         """
+        message["id"] = f"{len(self.messages)}"
         self.messages.append(message)
         return self.update_messages_to_remote(self.messages) if update_message else None
     
@@ -52,6 +52,10 @@ class IntentionTester:
         Extend the internal message list with multiple messages.
         Optionally update the remote client via query session.
         """
+        start_id = len(self.messages)
+        for i, msg in enumerate(messages):
+            msg["id"] = f"{start_id + i}"
+
         self.messages.extend(messages)
         return self.update_messages_to_remote(self.messages) if update_message else None
 
@@ -64,14 +68,20 @@ class IntentionTester:
         if self.extension_query_session:
             self.extension_query_session.update_messages(messages)
 
-    def update_extended_messages_to_remote(self, messages: list[str] = []):
+    def update_extended_messages_to_remote(self, messages: list[str] | None = None):
         """
         Update messages to the remote client via query session.
         Note: The underlying update_messages method performs a full sync of all messages
         to ensure client state consistency, rather than incremental updates.
         """
+        if messages is None:
+            messages = []
         if self.extension_query_session:
             self.extension_query_session.update_messages(self.messages + messages)
+
+    def process_delta_message(self, delta_message: dict[str, str]):
+        if self.extension_query_session:
+            self.extension_query_session.send_delta_message(delta_message)
 
     def request_referable_test_case_from_client(self, target_focal_method):
         """
@@ -144,100 +154,89 @@ class IntentionTester:
         # Check if at least one test indicator is present
         return any(indicator in content for indicator in test_indicators)
 
-    def extract_method_name(self, test_case_code):
+    def _load_test_case_from_file(self, file_path):
         """
-        Extracts a descriptive name for the test case, preferably ClassName::methodName(args).
+        Attempt to load and validate a test case from a file path.
         """
-        class_name = None
-        method_signature = None
+        if self.extension_query_session is None:
+            return None
         
-        # Try to find class name
-        class_match = re.search(r'class\s+(\w+)', test_case_code)
-        if class_match:
-            class_name = class_match.group(1)
-            
-        # Helper to clean and format signature
-        def format_sig(name, args):
-            args = args.strip()
-            # Collapse whitespace and newlines into single space
-            args = re.sub(r'\s+', ' ', args)
-            return f"{name}({args})"
+        answer = self.extension_query_session.request_client_response(
+            "The provided input doesn't appear to be a test case. Is it a file path to a test case file?",
+            response_type="confirm",
+        )
 
-        # Try to find method name
-        # Priority 1: @Test or @ParameterizedTest annotated methods
-        # We look for @Test/@ParameterizedTest followed by optional whitespace/newlines/modifiers, then void, then method name
-        # Using [\s\S]*? to skip annotations, modifiers (public, private, etc.)
-        test_method_match = re.search(r'@(?:Test|ParameterizedTest)[\s\S]*?\bvoid\s+(\w+)\s*\(([^)]*)\)', test_case_code)
-        
-        if test_method_match:
-            method_name = test_method_match.group(1)
-            method_args = test_method_match.group(2)
-            method_signature = format_sig(method_name, method_args)
-        else:
-            # Fallback to any void method that starts with 'test'
-            test_prefix_match = re.search(r'\bvoid\s+(test\w+)\s*\(([^)]*)\)', test_case_code, re.IGNORECASE)
-            if test_prefix_match:
-                method_name = test_prefix_match.group(1)
-                method_args = test_prefix_match.group(2)
-                method_signature = format_sig(method_name, method_args)
-            else:
-                # Fallback to any void method
-                method_match = re.search(r'\bvoid\s+(\w+)\s*\(([^)]*)\)', test_case_code)
-                if method_match:
-                    method_name = method_match.group(1)
-                    method_args = method_match.group(2)
-                    method_signature = format_sig(method_name, method_args)
+        if not answer or answer.lower() not in ["yes", "y", "true", "1"]:
+            self.append_message(
+                {
+                    "role": "assistant",
+                    "content": "⚠️ Invalid test case format. Proceeding without reference.",
+                }
+            )
+            return None
 
-        if class_name and method_signature:
-            return f"{class_name}::{method_signature}"
-        elif method_signature:
-            return method_signature
-        else:
-            logger.warning("Unable to extract method or class name from test case code.")
-            return "Unknown Test Case"
+        try:
+            if not os.path.exists(file_path.strip()):
+                self.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "⚠️ File not found. Proceeding without reference test case.",
+                    }
+                )
+                self.extension_query_session.update_messages(self.messages)
+                return None
+
+            with open(file_path.strip(), "r", encoding="utf-8") as f:
+                file_content = f.read()
+
+            if not self.is_valid_test_case(file_content):
+                self.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "⚠️ The file doesn't appear to contain a valid test case. Proceeding without reference.",
+                    }
+                )
+                self.extension_query_session.update_messages(self.messages)
+                return None
+
+            self.messages.append(
+                {
+                    "role": "assistant",
+                    "content": f"✅ Test case loaded from file: {file_path.strip()}",
+                }
+            )
+            self.extension_query_session.update_messages(self.messages)
+            return file_content
+
+        except Exception as e:
+            self.messages.append(
+                {
+                    "role": "assistant",
+                    "content": f"⚠️ Error reading file: {str(e)}. Proceeding without reference.",
+                }
+            )
+            self.extension_query_session.update_messages(self.messages)
+            return None
 
     def generate_test_case_with_refine(
         self,
-        target_focal_method,
-        target_context,
-        target_test_case_desc,
-        target_test_case_path,
-        referable_test_cases,
-        facts,
-        junit_version,
+        target_focal_method: str,
+        target_context: str,
+        target_test_case_desc: str,
+        target_test_case_path: str,
+        referable_test_case: str | None,
+        facts: list[str],
+        junit_version: str,
         prohibit_fact: bool = False,
     ):
         self.generation_with_refine_log = []
-        
-        referable_test_case = None
+        self.messages = []  # Reset messages for new generation
 
-        if self.query_session:
-            if referable_test_cases and len(referable_test_cases) > 0:
-                # generate options and ask
-                options = []
-                for i, tc in enumerate(referable_test_cases):
-                    name = self.extract_method_name(tc)
-                    options.append(f"{i+1}. {name}")
-                options.append("Provide my own reference")
-                
-                selection = self.query_session.request_client_response(
-                    "Select a reference test case:",
-                    response_type="choice",
-                    options=options
-                )
-                
-                if selection == "Provide my own reference":
-                    referable_test_case = self.request_referable_test_case_from_client(target_focal_method)
-                elif selection in options:
-                    index = options.index(selection)
-                    referable_test_case = referable_test_cases[index]
-            else:
-                # no references found, ask user directly
-                referable_test_case = self.request_referable_test_case_from_client(target_focal_method)
-        else:
-            logger.warning("No query session available when selecting referable test case!")
-            if referable_test_cases and len(referable_test_cases) > 0:
-                referable_test_case = referable_test_cases[0]
+        # Request referable test case from client if query session is available
+        if self.extension_query_session and not referable_test_case:
+            referable_test_case = self.request_referable_test_case_from_client(
+                target_focal_method
+            )
 
         target_test_class_name = target_test_case_path.split("/")[-1].replace(
             ".java", ""
@@ -257,9 +256,10 @@ class IntentionTester:
         )
         self.generation_with_refine_log.append((test_status, prompt, gen_test_case))
 
-        if test_status == "success":
-            self.finish_generation()
-            return gen_test_case, test_status, self.messages
+        # DEBUG set at least one refine
+        # if test_status == "success":
+        #     self.finish_generation()
+        #     return gen_test_case, test_status, self.messages
 
         for iteration in range(self.max_round):
             gen_test_case, prompt = self.refine(
@@ -285,7 +285,9 @@ class IntentionTester:
         return gen_test_case, test_status, self.messages
 
     def finish_generation(self):
-        finish_messages = self.test_gen_agent.generate_finish()
+        included = ['role', 'content']
+        messages = map(lambda x: {k: v for k, v in x.items() if k in included}, self.messages)
+        finish_messages = self.test_gen_agent.generate_finish(messages)
         self.extend_messages(finish_messages)
 
     def generate_test_case(
@@ -308,9 +310,13 @@ class IntentionTester:
             facts,
             junit_version,
             prohibit_fact,
-            stream_callback=self.update_extended_messages_to_remote,
+            stream_callback=self.process_delta_message,
+            append_chat_message_callback=self.append_message
         )
-        self.messages.extend(messages)
+        
+        # TODO do we need to refresh the two new generated messages again
+        # self.messages.extend(messages)
+
         return gen_test_case, prompt
 
     def refine(
@@ -335,8 +341,17 @@ class IntentionTester:
             target_test_case_desc,
             facts,
             prohibit_fact,
-            stream_callback=self.update_extended_messages_to_remote
+            stream_callback=self.process_delta_message,
+            append_chat_message_callback=self.append_message
         )
+
+        if self.extension_query_session is not None:
+            refined_tc = self.extension_query_session.request_client_response(
+                f"Choose a refined test case",
+                response_type="code-choice",
+                options=refined_tc
+            )
+
         self.messages.extend(messages)
         self.update_messages_to_remote(self.messages)
         return refined_tc, prompt

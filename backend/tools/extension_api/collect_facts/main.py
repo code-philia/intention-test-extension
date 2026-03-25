@@ -92,8 +92,8 @@ def load_coverage_data_jacoco(path: str):
                 
                 # NOTE: for blade, we skip the test cases that extend other classes
                 
-                if args.project_name == 'blade' and is_extend_clss:
-                    continue    
+                # if args.project_name == 'blade' and is_extend_clss:
+                #     continue    
                 
                 if test_case_class_name is None:
                     raise ValueError(f'Test case class name is not found.\nTest case:\n{tc}\n')
@@ -236,48 +236,84 @@ def retrieve_reference(corpus_code, corpus_desc, target_focal_method, target_tes
 
 # ========== MAIN FUNCTION ==========
 
-def collect_facts(workspace_path: str, coverage_path: str, test_desc_path: str, fact_set_dir: str, top_k: int =3):
+def collect_facts(
+    workspace_path: str,
+    coverage_path: str,
+    test_desc_path: str,
+    fact_set_dir: str,
+    *,
+    project_name: str,
+    llm_name: str = "gpt-4o",
+    retrieval_threshold: float = 0.2,
+    resume_generation_at: int = 0,
+    specify_test_cov_idx: list[int] | None = None,
+    fact_setting: str = "disc",
+    test_desc_setting: str = "full",
+    reference_setting: str = "retrieve",
+    max_exploration_depth: int = 5,
+    top_k: int = 3,
+):
     coverage_data = load_coverage_data_jacoco(coverage_path)
-    test_desc_data = load_test_desc(test_desc_path, setting=args.test_desc_setting)
+    test_desc_data = load_test_desc(test_desc_path, setting=test_desc_setting)
 
-    # prepare LSP server
-    lsp_workspace = workspace_path
-    lsp_server = JavaLanguageServer(lsp_workspace, log=False)
-    lsp_server.initialize(lsp_workspace)
-    file_paths = lsp_server.get_all_file_paths(lsp_workspace)
+    lsp_server = JavaLanguageServer(workspace_path, log=False)
+    lsp_server.initialize(workspace_path)
+    file_paths = lsp_server.get_all_file_paths(workspace_path)
     lsp_server.open_in_batch(file_paths)
 
-    # prepare embedding model and tokenizer used by retriever
-    embedding_model = AutoModel.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True).eval().to('cuda')
-    embedding_model_tokenizer = AutoTokenizer.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True)
+    embedding_model = AutoModel.from_pretrained(
+        "Salesforce/codet5p-110m-embedding",
+        trust_remote_code=True,
+    ).eval().to("cuda")
+    embedding_model_tokenizer = AutoTokenizer.from_pretrained(
+        "Salesforce/codet5p-110m-embedding",
+        trust_remote_code=True,
+    )
 
-    # prepare the fact discriminator
-    if args.fact_setting == 'golden':
+    if fact_setting == "golden":
         fact_discriminator = FactDiscriminator(embedding_model=None, tokenizer=None, is_golden=True)
-    elif args.fact_setting == 'disc':
-        fact_discriminator = FactDiscriminator(embedding_model=embedding_model, tokenizer=embedding_model_tokenizer, is_golden=False)
-        graph_explorer = GraphExplorer(lsp_server, max_depth=args.max_exploration_depth, efficieny_mode=True if args.project_name == 'lambda' else False)
-    elif args.fact_setting == 'none':
+    elif fact_setting == "disc":
+        fact_discriminator = FactDiscriminator(
+            embedding_model=embedding_model,
+            tokenizer=embedding_model_tokenizer,
+            is_golden=False,
+        )
+        graph_explorer = GraphExplorer(
+            lsp_server,
+            max_depth=max_exploration_depth,
+            efficieny_mode=True if project_name == "lambda" else False,
+        )
+    elif fact_setting == "none":
         pass
     else:
         raise ValueError
-    
-    # prepare the save path
-    os.makedirs(fact_set_dir, exist_ok=True)
-    save_path = f'{fact_set_dir}/ref_{args.reference_setting}_fact_{args.fact_setting}_desc_{args.test_desc_setting}_depth_{args.max_exploration_depth}_refThres_{args.retrieval_threshold}.json'
 
-    if args.resume_generation_at > 0:
-        save_path = save_path.replace('.json', f'_resume_{args.resume_generation_at}.json')
+    os.makedirs(fact_set_dir, exist_ok=True)
+    save_path = (
+        f"{fact_set_dir}/ref_{reference_setting}_fact_{fact_setting}"
+        f"_desc_{test_desc_setting}_depth_{max_exploration_depth}"
+        f"_refThres_{retrieval_threshold}.json"
+    )
+
+    if resume_generation_at > 0:
+        save_path = save_path.replace(".json", f"_resume_{resume_generation_at}.json")
+
+    if specify_test_cov_idx is None:
+        specify_test_cov_idx = []
 
     collected_facts = []
-    # start collection
-    for target_pair_idx, each_target_pair in tqdm(enumerate(coverage_data), total=len(coverage_data), ncols=80, desc='Generating test cases'):
-        if target_pair_idx < args.resume_generation_at:
+    for target_pair_idx, each_target_pair in tqdm(
+        enumerate(coverage_data),
+        total=len(coverage_data),
+        ncols=80,
+        desc="Generating test cases",
+    ):
+        if target_pair_idx < resume_generation_at:
             continue
-            
-        if args.specify_test_cov_idx and target_pair_idx not in args.specify_test_cov_idx:
+
+        if specify_test_cov_idx and target_pair_idx not in specify_test_cov_idx:
             continue
-        
+
         focal_file_path = each_target_pair.focal_file_path
         focal_method_name = each_target_pair.focal_method_name
         target_focal_method = each_target_pair.focal_method
@@ -286,61 +322,92 @@ def collect_facts(workspace_path: str, coverage_path: str, test_desc_path: str, 
         target_test_case = each_target_pair.test_case
         target_test_case_name = each_target_pair.test_case_name
         target_test_case_path = each_target_pair.test_case_path
-        
-        focal_method_pure_name = focal_method_name.split('::::')[1].split('(')[0]
 
-        assert test_desc_data[target_pair_idx]['target_test_case'] == target_test_case
-        target_test_case_desc = test_desc_data[target_pair_idx]['test_desc']['under_setting']
+        focal_method_pure_name = focal_method_name.split("::::")[1].split("(")[0]
 
-        if args.reference_setting == 'none':
+        assert test_desc_data[target_pair_idx]["target_test_case"] == target_test_case
+        target_test_case_desc = test_desc_data[target_pair_idx]["test_desc"]["under_setting"]
+
+        if reference_setting == "none":
             references_tc_rag, references_fm_rag, references_score = [], [], []
         else:
-            # prepare retriever and retrieve the reference
-            # prepare corpus. remove the target pair from the corpus
-            corpus_coverage_data = coverage_data[:target_pair_idx] + coverage_data[target_pair_idx+1:]
-            corpus_desc_data = test_desc_data[:target_pair_idx] + test_desc_data[target_pair_idx+1:]
+            corpus_coverage_data = coverage_data[:target_pair_idx] + coverage_data[target_pair_idx + 1 :]
+            corpus_desc_data = test_desc_data[:target_pair_idx] + test_desc_data[target_pair_idx + 1 :]
 
-            references_cov_rag, references_fm_rag, references_fm_name_rag, references_tc_rag, reference_tc_desc_rag, references_score, references_tc_path = retrieve_reference(
-                corpus_coverage_data, corpus_desc_data, target_focal_method, target_test_case, target_test_case_desc, args.retrieval_threshold, embedding_model_tokenizer, embedding_model, args.reference_setting, top_k=top_k
-                )
-            
-        # collect facts
-        if args.fact_setting == 'golden':
+            (
+                references_cov_rag,
+                references_fm_rag,
+                references_fm_name_rag,
+                references_tc_rag,
+                reference_tc_desc_rag,
+                references_score,
+                references_tc_path,
+            ) = retrieve_reference(
+                corpus_coverage_data,
+                corpus_desc_data,
+                target_focal_method,
+                target_test_case,
+                target_test_case_desc,
+                retrieval_threshold,
+                embedding_model_tokenizer,
+                embedding_model,
+                reference_setting,
+                top_k=top_k,
+            )
+
+        if fact_setting == "golden":
             facts, target_tc_for_verify = fact_discriminator.get_golden_facts(target_pair_idx)
             if target_tc_for_verify is not None and target_tc_for_verify != target_test_case:
-                print(f'WARNING: The target test case for verification is different from the target test case for generation.')
-                print(f'# Target test case from coverage dataset:\n{target_test_case}')
-                print(f'# Target test case from fact dataset:\n{target_tc_for_verify}')
+                print("WARNING: The target test case for verification is different from the target test case for generation.")
+                print(f"# Target test case from coverage dataset:\n{target_test_case}")
+                print(f"# Target test case from fact dataset:\n{target_tc_for_verify}")
                 raise ValueError
-        elif args.fact_setting == 'none':
+        elif fact_setting == "none":
             raise ValueError
-        elif args.fact_setting == 'disc':
-            all_candidate_facts, facts, facts_sim, all_usages, usages, usages_sim = discriminate_cruical_facts(graph_explorer, fact_discriminator, focal_file_path, target_focal_method, target_test_case_desc, focal_method_pure_name)
+        elif fact_setting == "disc":
+            (
+                all_candidate_facts,
+                facts,
+                facts_sim,
+                all_usages,
+                usages,
+                usages_sim,
+            ) = discriminate_cruical_facts(
+                graph_explorer,
+                fact_discriminator,
+                focal_file_path,
+                target_focal_method,
+                target_test_case_desc,
+                focal_method_pure_name,
+            )
         else:
             raise ValueError
 
-        rag_references = [(references_score[i], references_fm_rag[i], references_tc_rag[i]) for i in range(len(references_fm_rag))]
+        rag_references = [
+            (references_score[i], references_fm_rag[i], references_tc_rag[i])
+            for i in range(len(references_fm_rag))
+        ]
 
-        collected_facts.append({
-            'target_coverage_idx': target_pair_idx,
-            'focal_file_path': focal_file_path,
-            'focal_method_name': focal_method_name,
-            'test_desc': target_test_case_desc,
-            'rag_references': rag_references,
-            'target_test_case': target_test_case,
-            'candidate_facts': all_candidate_facts,
-            'disc_facts': facts,
-            'disc_facts_sim': facts_sim,
-            'all_usages': all_usages,
-            'top_usages': usages,
-            'top_usages_sim': usages_sim,
-            'target_coverage': target_coverage,
-        })
+        collected_facts.append(
+            {
+                "target_coverage_idx": target_pair_idx,
+                "focal_file_path": focal_file_path,
+                "focal_method_name": focal_method_name,
+                "test_desc": target_test_case_desc,
+                "rag_references": rag_references,
+                "target_test_case": target_test_case,
+                "candidate_facts": all_candidate_facts,
+                "disc_facts": facts,
+                "disc_facts_sim": facts_sim,
+                "all_usages": all_usages,
+                "top_usages": usages,
+                "top_usages_sim": usages_sim,
+                "target_coverage": target_coverage,
+            }
+        )
 
-        with open(save_path, 'w') as f:
+        with open(save_path, "w") as f:
             json.dump(collected_facts, f, indent=4)
-
-
 def discriminate_cruical_facts(graph_explorer, fact_discriminator, focal_file_path, target_focal_method, target_test_case_desc, focal_method_name):
     candidate_facts, focal_method_usages = graph_explorer.explore(focal_file_path, target_focal_method, focal_method_name)
 
@@ -366,26 +433,40 @@ def discriminate_cruical_facts(graph_explorer, fact_discriminator, focal_file_pa
     return candidate_facts, facts_string, facts_sim, focal_method_usages, usages_string, usages_sim
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Collect facts.')
-    parser.add_argument('--project_name', type=str)
-    parser.add_argument('--llm_name', type=str, default='gpt-4o')
-    parser.add_argument('--retrieval_threshold', type=float, default=0.2)
-    parser.add_argument('--resume_generation_at', type=int, default=0)
-    parser.add_argument('--specify_test_cov_idx', type=lambda s: [int(x) for x in s.split(',')], default=[])
-    parser.add_argument('--fact_setting', type=str, default='disc', choices=['none', 'disc', 'golden'])
-    parser.add_argument('--test_desc_setting', type=str, default='full', choices=['none', 'obj', 'obj_pre', 'obj_exp', 'full'])
-    parser.add_argument('--reference_setting', type=str, default='retrieve', choices=['none', 'retrieve', 'golden'])
-    parser.add_argument('--max_exploration_depth', type=int, default=5)
-    
-    parser.add_argument('--workspace_path', type=str)
-    
-    parser.add_argument('--coverage_path', type=str, help='Path to the coverage data directory')   # input dir
-    parser.add_argument('--test_desc_path', type=str, help='Path to the test description directory')  # input dir
-    parser.add_argument('--fact_set_dir', type=str, help='Path to the fact set output directory')    # output dir
-    parser.add_argument('--top_k', type=int, default=3, help='Number of top references to retrieve')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Collect facts.")
+    parser.add_argument("--project_name", type=str)
+    parser.add_argument("--llm_name", type=str, default="gpt-4o")
+    parser.add_argument("--retrieval_threshold", type=float, default=0.2)
+    parser.add_argument("--resume_generation_at", type=int, default=0)
+    parser.add_argument("--specify_test_cov_idx", type=lambda s: [int(x) for x in s.split(",")], default=[])
+    parser.add_argument("--fact_setting", type=str, default="disc", choices=["none", "disc", "golden"])
+    parser.add_argument("--test_desc_setting", type=str, default="full", choices=["none", "obj", "obj_pre", "obj_exp", "full"])
+    parser.add_argument("--reference_setting", type=str, default="retrieve", choices=["none", "retrieve", "golden"])
+    parser.add_argument("--max_exploration_depth", type=int, default=5)
+
+    parser.add_argument("--workspace_path", type=str)
+    parser.add_argument("--coverage_path", type=str, help="Path to the coverage data directory")
+    parser.add_argument("--test_desc_path", type=str, help="Path to the test description directory")
+    parser.add_argument("--fact_set_dir", type=str, help="Path to the fact set output directory")
+    parser.add_argument("--top_k", type=int, default=3, help="Number of top references to retrieve")
 
     args = parser.parse_args()
 
-    logger.debug(f'Colleting facts for project {args.project_name}')
-    collect_facts(args.workspace_path, args.coverage_path, args.test_desc_path, args.fact_set_dir, args.top_k)
+    logger.debug(f"Collecting facts for project {args.project_name}")
+    collect_facts(
+        args.workspace_path,
+        args.coverage_path,
+        args.test_desc_path,
+        args.fact_set_dir,
+        project_name=args.project_name,
+        llm_name=args.llm_name,
+        retrieval_threshold=args.retrieval_threshold,
+        resume_generation_at=args.resume_generation_at,
+        specify_test_cov_idx=args.specify_test_cov_idx,
+        fact_setting=args.fact_setting,
+        test_desc_setting=args.test_desc_setting,
+        reference_setting=args.reference_setting,
+        max_exploration_depth=args.max_exploration_depth,
+        top_k=args.top_k,
+    )
